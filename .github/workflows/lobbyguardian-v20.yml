@@ -1,0 +1,42 @@
+# v2.0: client vote kick and optional one-shot network reconnect; no moderation bypass.
+# Lobby Guardian Android candidate builder
+# This file builds original open-source FusionCore plus an independent experimental plugin.
+# It does not change your installed Among Us APK or use account tokens.
+# Embedded source archive SHA-256: 0a9e4c4b0f7807c7cee91f064400a6957778550fe9c08c538364d1d1ef868fd9
+name: Lobby Guardian Android v2.0 (non-host vote + reconnect)
+on:
+  push:
+    paths:
+      - '.github/workflows/lobbyguardian-v20.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout your FusionCore fork
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Extract Lobby Guardian source and matching FusionCore libraries
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import base64, hashlib, io, pathlib, zipfile, html
+          payload = ''.join('''            UEsDBBQAAAAIACVRdl1HrVIM1gAAAKABAAAlAAAARG9jcy9Mb2JieUd1YXJkaWFuLXJ1bGVzLmV4YW1wbGUuanNv
+            bm2RXU/CMBSG7/crlnGLJCgR8K7OLjF8hDDwxnBxXI+msWvneoYawn+nRZRteNnnfU7z9nQXhGHEKjL3oLmGF4Ui
+            ugtfQVns+sjjLZbfRmODJwrengzhRGbvjAjzgqwTqKz+5pJSohaxEeiTZ0cdT9lsMeWd/vXNIHJk8ysvKilqmoW8
+            UHhVONrQ5pCj5V+Q0dl1Ry/76NKNjSaQun51AXkPf2bOPlPKfP7beLVcpyv+0BmPhrctv1XaPd4Silbro9nsvWmv
+            dokflSzRpuR/4FGcNhnsgwNQSwMEFAAAAAgAJVF2XcVMQq+BAQAAbgIAABoAAABEb2NzL2ludGVyb3Atc2lnbmF0
+            dXJlcy5tZGVRQW7bMBC86xUD9OIYsY22lyK3QIZTN4ajQ3M3Ra4twhRXIFdW9Pus7RQukiN3Z4azM9+wjkJpbywh
