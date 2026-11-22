@@ -1,0 +1,425 @@
+# v1.8: capture root Harmony errors and try a safe no-argument hook fallback.
+# Lobby Guardian Android candidate builder
+# This file builds original open-source FusionCore plus an independent experimental plugin.
+# It does not change your installed Among Us APK or use account tokens.
+# Embedded source archive SHA-256: 0a9e4c4b0f7807c7cee91f064400a6957778550fe9c08c538364d1d1ef868fd9
+name: Lobby Guardian Android v1.8 (join-hook diagnosis)
+on:
+  push:
+    paths:
+      - '.github/workflows/lobbyguardian-v18.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout your FusionCore fork
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Extract Lobby Guardian source and matching FusionCore libraries
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import base64, hashlib, io, pathlib, zipfile, html
+          payload = ''.join('''            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
+          '''.split())
+          raw = base64.b64decode(payload, validate=True)
+          expected = '0a9e4c4b0f7807c7cee91f064400a6957778550fe9c08c538364d1d1ef868fd9'
+          assert hashlib.sha256(raw).hexdigest() == expected, 'Embedded source checksum mismatch'
+          project = pathlib.Path('LobbyGuardian')
+          project.mkdir(exist_ok=True)
+          with zipfile.ZipFile(io.BytesIO(raw)) as z:
+              for name in z.namelist():
+                  out = (project / name).resolve()
+                  assert out.is_relative_to(project.resolve()), 'Unexpected archive path'
+                  out.parent.mkdir(parents=True, exist_ok=True)
+                  out.write_bytes(z.read(name))
+          src = pathlib.Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+          refs = project / 'refs'
+          refs.mkdir(exist_ok=True)
+          with zipfile.ZipFile(src) as z:
+              dlls = [name for name in z.namelist() if name.lower().endswith('.dll') and '/core/' in ('/' + name.lower())]
+              print('FusionCore runtime DLLs found:', len(dlls))
+              for name in dlls:
+                  target = refs / pathlib.Path(name).name
+                  target.write_bytes(z.read(name))
+          required = ['BepInEx.Core.dll','BepInEx.Unity.IL2CPP.dll']
+          missing = [name for name in required if not (refs/name).exists()]
+          if missing:
+              raise SystemExit(f'Missing FusionCore BepInEx assemblies: {missing}. Cannot build safely.')
+          chosen = [p for p in sorted(refs.glob('*.dll')) if p.name.startswith((
+              'BepInEx', 'Il2CppInterop', 'UnityEngine', 'Harmony', '0Harmony', 'MonoMod', 'Unhollower'
+          ))]
+          reference_xml = '\n'.join(
+              '    <Reference Include="{}"><HintPath>refs/{}</HintPath><Private>false</Private></Reference>'.format(
+              html.escape(p.stem, quote=True), html.escape(p.name, quote=True))
+              for p in chosen
+          )
+          project_file = '''<Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <Nullable>enable</Nullable>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              <AssemblyName>LobbyGuardian.Plugin</AssemblyName>
+            </PropertyGroup>
+            <ItemGroup>
+              <Compile Include="Plugin/*.cs"/>
+          __REFERENCES__
+            </ItemGroup>
+          </Project>'''.replace('__REFERENCES__',reference_xml)
+          (project/'LobbyGuardian.Plugin.csproj').write_text(project_file)
+          print('Selected compatible local references:', len(chosen))
+          PYTHON
+      - name: Add managed plugin status probe
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import base64,zlib
+          out=Path('LobbyGuardian/Plugin/RuntimeStatus.cs')
+          out.write_bytes(zlib.decompress(base64.b64decode('eNplUU1PwzAMvfdXWD21U8nEicPEYcBAQ4ghusE5a70uqE2q2N0HU/87STfGNnyJ/eK8+D03pHQB6ZYYq0HQnFRiPLkAprhh8UxG/+J3WI/1aDMIAi0rpFpmCC9mPt8+NdLmSrrGQGlGq2UJxJJVBlkpieC90awqTB3WULALwMVl58qoHGZ1LhkjYus/dDcFJnCocmSpyrh7vKfwwXZ7zP9QHytpoZa8hFt4c4e4N9VcaYx8Qa7SC1X4PIHwTMUVdWOKLyc9jAdnnI+qRPFpFeOwLL1BUd0xeJtStEqW6hutOKaRxvXFWD4OwvaKEpA848yN+eC0T51Pk8WCkIUDX81aTE3aGRCFkzBO/nHVZVMo/YGWlNGOJLwWN+FZVxufqGiPWSY5W0I02mRYs3sbww76PdgvCZwThTbkNkNQNcSgcYUWMitpCcPKuIXMSECvf2Bsgzb4ATAfudg=')))
+          p=Path('LobbyGuardian/Plugin/LobbyGuardianPlugin.cs')
+          s=p.read_text()
+          old='RuleStore.LoadOrCreate(_rulesPath);'
+          assert s.count(old)==1, 'Unexpected plugin Load structure'
+          s=s.replace(old,old+'\n        RuntimeStatus.Update("plugin-loaded", "BepInEx entered LobbyGuardianPlugin.Load");')
+          s=s.replace('_events.Write("system", "hook-attempted", "OnPlayerJoined registered");',
+            '_events.Write("system", "hook-attempted", "OnPlayerJoined registered");\n            RuntimeStatus.Update("hook-attempted", "Join hook patch call returned; live events unverified");')
+          s=s.replace('_events.Write("system", "hook-error", e.GetType().Name);',
+            '_events.Write("system", "hook-error", e.GetType().Name);\n            RuntimeStatus.Update("hook-error", e.GetType().Name);')
+          p.write_text(s)
+          print('Plugin status probe added, source bytes',out.stat().st_size)
+          PYTHON
+      - name: Improve join hook diagnostics and attempt safe fallback
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import base64,zlib
+          Path('LobbyGuardian/Plugin/LobbyGuardianPlugin.cs').write_bytes(zlib.decompress(base64.b64decode('''
+          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
+          DlY=
+          ''')))
+          Path('LobbyGuardian/Plugin/GameBridge.cs').write_bytes(zlib.decompress(base64.b64decode('''
+          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
+          Wz9x/ZcVlf
+          ''')))
+          runtime = Path('LobbyGuardian/Plugin/RuntimeStatus.cs')
+          status = runtime.read_text()
+          assert 'pluginVersion = "1.7"' in status
+          runtime.write_text(status.replace('pluginVersion = "1.7"', 'pluginVersion = "1.8"'))
+          print('Updated diagnostic and fallback hook source')
+          PYTHON
+      - name: Build Lobby Guardian plugin candidate
+        run: |
+          dotnet restore LobbyGuardian/LobbyGuardian.Plugin.csproj --ignore-failed-sources
+          dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+      - name: Bundle plugin in FusionCore BepInEx asset
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import os, zipfile
+          src = Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+          compiled = Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+          if not compiled.is_file():
+              raise SystemExit('Plugin DLL missing: build did not succeed')
+          tmp = src.with_suffix('.new.zip')
+          with zipfile.ZipFile(src) as source, zipfile.ZipFile(tmp,'w') as dest:
+              name = next((n for n in source.namelist() if n.endswith('core/BepInEx.Core.dll')), None)
+              if name is None:
+                  raise SystemExit('Unexpected BepInEx archive layout')
+              prefix = name[:-len('core/BepInEx.Core.dll')]
+              target = prefix + 'plugins/LobbyGuardian.Plugin.dll'
+              for info in source.infolist():
+                  if info.filename != target:
+                      dest.writestr(info, source.read(info.filename))
+              dest.write(compiled, target, compress_type=zipfile.ZIP_DEFLATED)
+          os.replace(tmp, src)
+          print('Bundled plugin at', target, 'in', src)
+          PYTHON
+      - name: Add visible Android in-game controls and separate package identity
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import base64,zlib
+          code=zlib.decompress(base64.b64decode('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'))
+          dest=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java')
+          dest.write_bytes(code)
+          game=Path('fusionApp/src/main/java/dev/allofus/fusioncore/hooks/GameRuntime.java')
+          s=game.read_text()
+          needle='            original.callActivityOnResume(activity);'
+          assert s.count(needle)==1, 'Unexpected FusionCore activity lifecycle'
+          replacement=needle+'\n            if (gameActivities.contains(activity)) {\n                try { dev.allofus.fusioncore.LobbyGuardianOverlay.attach(activity); }\n                catch (Throwable t) { Log.w("LobbyGuardianUI", "Overlay attach failed", t); }\n            }'
+          s=s.replace(needle,replacement)
+          game.write_text(s)
+          build=Path('fusionApp/build.gradle.kts')
+          g=build.read_text()
+          old='applicationId = "dev.allofus.fusioncore"'
+          assert g.count(old)==1, 'Unexpected Android applicationId'
+          g=g.replace(old,'applicationId = "dev.lobbyguardian.fusioncore"')
+          build.write_text(g)
+          print('Overlay Java',len(code),'bytes; separate applicationId configured')
+          PYTHON
+      - name: Update in-game diagnostics display to v1.8
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          p=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java')
+          code=p.read_text()
+          assert code.count('Lobby Guardian • v1.7') == 1
+          code=code.replace('Lobby Guardian • v1.7', 'Lobby Guardian • v1.8')
+          code=code.replace('LG_FLOATING_MENU_BUTTON_V17', 'LG_FLOATING_MENU_BUTTON_V18')
+          code=code.replace('The LG button only proves the Android overlay is visible. Runtime status below shows whether the managed plugin loaded and whether its hook was attempted.',
+              'Hook-registered means the native hook was requested. Hook-active means an actual join callback fired. Automatic bans are unverified until tested in a private room.')
+          anchor='            line(activity, content, "Host moderation", '
+          assert code.count(anchor)==1
+          extra='''            Button copyStatus = new Button(activity);
+            copyStatus.setText("Copy plugin diagnostics");
+            copyStatus.setAllCaps(false);
+            copyStatus.setOnClickListener(v -> {
+                android.content.ClipboardManager clip = (android.content.ClipboardManager)
+                    activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                if (clip != null) {
+                    clip.setPrimaryClip(android.content.ClipData.newPlainText("Lobby Guardian status", getStatus()));
+                    Toast.makeText(activity, "Diagnostic status copied", Toast.LENGTH_SHORT).show();
+                }
+            });
+            content.addView(copyStatus);
+          '''
+          code=code.replace(anchor,extra+anchor)
+          p.write_text(code)
+          print('Updated LG overlay version and copy-diagnostics control')
+          PYTHON
+      - name: Build custom Android FusionCore debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :fusionApp:assembleDebug --stacktrace
+      - name: Upload experimental APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LobbyGuardian-v1.8-Android-HOOK-EXPERIMENTAL
+          path: fusionApp/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Upload plugin source and DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: LobbyGuardian-v1.8-Plugin-Diagnostics
+          path: |
+            LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll
+            LobbyGuardian/Plugin/*.cs
+            LobbyGuardian/Docs/*.json
+            LobbyGuardian/README.md
+          if-no-files-found: warn
+
