@@ -1,0 +1,756 @@
+name: Lobby Guardian v4.3.51 - Early Connection and Disconnect Defense
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4351-early-connection-defense.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout FusionCore
+      uses: actions/checkout@v4
+    - name: Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: .NET 10
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - name: Gradle
+      uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Recreate v4.3.38 source stages without oversized Bash arguments
+      shell: bash
+      run: |
+        python3 - <<'PY_BASELINE'
+        from pathlib import Path
+        import subprocess,yaml,tempfile
+        source=Path('.github/workflows/lobbyguardian-v4338-fix-ghost-chat-alwayschat-ghosts-vents-spoof.yml')
+        assert source.is_file(), 'Previous successful v4.3.38 workflow not found'
+        old=yaml.safe_load(source.read_text(encoding='utf8'))
+        steps=old['jobs']['android']['steps']
+        assert sum(s.get('name')=='Build v4.3.38 Android candidate APK' for s in steps)==1
+        count=0
+        for step in steps:
+            name=step.get('name','')
+            if name=='Build v4.3.38 Android candidate APK':break
+            if not step.get('run') or name=='Install PyYAML':continue
+            print('>>> BASELINE '+name,flush=True)
+            with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False) as temp:
+                temp.write(step['run'])
+                script_file=temp.name
+            try:
+                subprocess.run(['bash','-eo','pipefail',script_file],check=True)
+            finally:
+                Path(script_file).unlink(missing_ok=True)
+            count+=1
+        assert count>=18, 'Not enough source stages were reproduced'
+        print('Recreated v4.3.38 game and Android sources from the pinned successful workflow:',count,'stages')
+        PY_BASELINE
+    - name: Fix GameCode resolver, name-on-join and Android copy-on-exit
+      shell: bash
+      run: |
+        python3 - <<'PY_PATCH'
+        from pathlib import Path
+        import zlib,base64,subprocess
+        s="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"
+        file=Path('/tmp/patch_guardian_4339.py')
+        file.write_bytes(zlib.decompress(base64.b64decode(s)))
+        subprocess.run(['python3',str(file)],check=True)
+        PY_PATCH
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_DLL'
+        from pathlib import Path
+        import os,zipfile
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(), 'Compiled plugin or bundled BepInEx runtime missing'
+        temp=asset.with_suffix('.code4339.zip')
+        with zipfile.ZipFile(asset) as old,zipfile.ZipFile(temp,'w') as fresh:
+            prefix=next((n[:-len('core/BepInEx.Core.dll')] for n in old.namelist() if n.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None, 'BepInEx core missing'
+            target=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for entry in old.infolist():
+                if entry.filename!=target:fresh.writestr(entry,old.read(entry.filename))
+            fresh.write(dll,target,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(temp,asset)
+        print('Lobby Guardian 4.3.39 game/plugin and Android native clipboard bridge bundled')
+        PY_DLL
+    - name: Add selective host-only anti-flood defense, disconnect incident recorder, original Guardian controls and local self-test
+      shell: bash
+      run: |
+        python3 - <<'PY_REPAIR_4340'
+        import zlib,base64,pathlib,subprocess
+        root=pathlib.Path('/tmp/guardian4340')
+        root.mkdir(parents=True,exist_ok=True)
+        (root/'HostResilienceShield.cs').write_bytes(zlib.decompress(base64.b64decode("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")))
+        (root/'patch.py').write_bytes(zlib.decompress(base64.b64decode("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")))
+        subprocess.run(['python3',str(root/'patch.py')],check=True)
+        PY_REPAIR_4340
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_REBUNDLE_4340'
+        import zipfile,os
+        from pathlib import Path
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(),'Patched host defense DLL or runtime missing'
+        with zipfile.ZipFile(asset) as original:
+            prefix=next((x[:-len('core/BepInEx.Core.dll')] for x in original.namelist() if x.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None,'BepInEx core missing'
+            name=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            replacement=asset.with_name('guardian4340-bepinex.zip')
+            with zipfile.ZipFile(replacement,'w') as target:
+                for item in original.infolist():
+                    if item.filename!=name:target.writestr(item,original.read(item.filename))
+                target.write(dll,name,compress_type=zipfile.ZIP_DEFLATED)
+            assert replacement.stat().st_size>100000
+            os.replace(replacement,asset)
+        print('v4.3.40 host shield DLL has been rebuilt and embedded in Android runtime')
+        PY_REBUNDLE_4340
+    - name: Repair name-on-join setting race, actual chat HUD controls and host-only start button; recompile
+      shell: bash
+      run: |
+        python3 - <<'PY_FIX_4341'
+        import base64,zlib,subprocess
+        from pathlib import Path
+        script=Path('/tmp/guardian4341_fix.py')
+        script.write_bytes(zlib.decompress(base64.b64decode('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')))
+        subprocess.run(['python3',str(script)],check=True)
+        PY_FIX_4341
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_REBUNDLE_4341'
+        from pathlib import Path
+        import zipfile,os
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(), 'Compiled plugin and embedded runtime required'
+        replacement=asset.with_name('guardian4341-bepinex.zip')
+        with zipfile.ZipFile(asset) as original,zipfile.ZipFile(replacement,'w') as updated:
+            prefix=next((v[:-len('core/BepInEx.Core.dll')] for v in original.namelist() if v.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None, 'BepInEx runtime core missing'
+            dest=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for info in original.infolist():
+                if info.filename!=dest:updated.writestr(info,original.read(info.filename))
+            updated.write(dll,dest,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(replacement,asset)
+        print('v4.3.41: updated C# plugin bundled. Clipboard on leave remains untouched.')
+        PY_REBUNDLE_4341
+    - name: Add host-only End Game with confirmation, original Guardian Host menu and normal RPC
+      shell: bash
+      run: |
+        python3 - <<'PY_END_4342'
+        from pathlib import Path
+        import base64,zlib,subprocess
+        Path('/tmp/guardian-4342-end.cs').write_bytes(zlib.decompress(base64.b64decode('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')))
+        Path('/tmp/guardian-4342-patch.py').write_bytes(zlib.decompress(base64.b64decode('eNqNV+Fu2zYQ/u+n4PSjkhBZRtv8KDp4Q+O66YYkDhKnQIEAAS1RNh2J1EQqjtEF2LPs0fYk+46SHSe20wgBYpm84913H+8+Z5UuWMntLJcTJotSV5ad47VT9ulf4J/oyWR5XPMqlVz1zvN6KpUfdubtclYbqdWnsuyZKukVXKrenN/xXiruejzPNdZ7zZ5EV6K3cnSlZCZFOry3FTcxWcAnN0bg+DKW5iaVVRAyrlI2p9dM5iIII+Zf1IpplS8Zz6yo2N1h/D4+fMt0JREXz9nqAFYIVVNiyczvGF1XiWgj7tmi7E3bbd3D94fvukKlcWIeI2j2Pzn3mBeia2Qq2BAx0RuhlQscY7lFekxpGFo+FanfCcqe/1Ubi7201TmPF5W04maytMIE7QmV4Gn7TRh2Okku4a4P44H79EVwW1fCkH3H9JvlxsiKexsIgJpKNe37tc26HygBlcx01ffZxkOBuCoOcm1EPJbJbRD+6q+TjRNdKxs0pmG//zbyzzSrRC75JBdsSplnFWU8gydmYc9QMJnTMsVlEFKZ80S0PqLm34F/rZ7HsQJkFUT0NmyzbuFxeZloO7MOkaQ/f1X2/jp/Ky0KyKMy8tbM+O+ff9k3bQUrKz0Fuoa9YaY2pUykrg3jiZV30i69yBtNgNAdaJZyyyNXYc6IOlxZIZjOWLt+R+4cjAZUBG2ZuIcfVui064gI4igLyieOK7GH1P11BSizHUUYbXGaEASnp+CeIkuiXWPBarVRklruwcA5oPyJxC5RwQq6I16z1qWrFdOqYXaGlOqqQuDNHpbhHIF0l1oJhjutpm4TEeTaN4CnKhDtxfkgZmN8D2jr3LJUGpBjCWANAUM9xlh4wveJVkoAph5LKrFgC+mQ6awCn9TWatVEvr51wdfR5ZiNzk6+h14UhN3ffnQ2Sabg51MObD5LnutpfFTLPBVVwMMn2+iJjbBjh43zvpXv795um1NQBjUIvPFMGgSd50j1r1oAWpdfIVAs8AFdxUE2/Da8+M4IAzBFKneQOyC+vlb4+65rVtSwnognQdBtIyRxSG1EU5AWY3cnyT9ugwEJ/D+2UfVZsEI1jBkdknBFFK5Vqp2zNup4T55nYsqJIUdNGbwBqCZyL1J1nu+2ONdGbloMzz6z40+nQxQqdeWIFjOZzLaKtmZqtdy9QM+fl6Oz0WROfEmKtE+Ffvwq2KDN8we747K2gWeXpQDRgVuXsBW4m477r7EFlKhpemWTU+NFl0uYF3FbqbEsxCloIKmL7/f1BbOEZX0atuC092SwuoCoot1EFwXGXjxHXb2feSs5nd/P4inAd5+/uIG130xmQWP0S5/q+ObNL80rht1nWQFJXS2RRftlcYs5bF7yh5IFdOaotsDp0gKmgunauvo8XwiyKOO5EWG4v8z0wL4ZBwHhbzWs0WyCkNI8ctPy0gIjQDeY8QrEM/HV+MvNh5fQf9i7MtYcl6Dgt2JMY4W3bXLdcdprItKYDWYCww9T3mJQyOzxKmMTaZ92eojYixqvJ8Oz4/HXm5PR2XEYm5le7MPyISE3wfA+EaXr6yL8sR3YOqaWJTRz8tQNJjQPw+9E+tLJ2xg8bEf18LMO3KS/q/luXNFmU59YHPyE8c3WlvDP4OHUyp9kDtupgqlMvGgrHe/S+frIvIPWqy5tyx7PiTPcf4ibpnU2PXsprBcebLtCZ97lJRUWc7adl9TwN8eoE6xo1mvy7PNMxk+jPNI6FxxNk3Dx2nuyw5j9/VgFsTtRmg4EBCV7pW6VXqh9cVyVKbW13X64RbsjwGjoPykNcYQETKPJSL48U4C1JPXnH7SvUHnzTYFHJrs0XiuI/F1SkUbnaxRw62KXYHA+5q8yv7IyhwgcqhlNPVL5Jh6pE4Er9spIoKIJN9KAMlu6VrHQ1S2ppkSXS0itbk7uWJbrxVoL+gOsXWhdDHTanES/JXZF435TvJRKiSrawG9+Ir37uOM30qOeXKEVMbvQXSSHNgcdkUnIDWpH0UqVuGsLwdywvhmgLKG2aKKVOmlFMYRg1PYBRPM/PGB/9w==')))
+        subprocess.run(['python3','/tmp/guardian-4342-patch.py'],check=True)
+        PY_END_4342
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_REBUNDLE_END_4342'
+        from pathlib import Path
+        import zipfile,os
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(), 'End Game DLL or embedded BepInEx runtime missing'
+        replacement=asset.with_name('guardian4342-bepinex.zip')
+        with zipfile.ZipFile(asset) as original, zipfile.ZipFile(replacement,'w') as updated:
+            prefix=next((n[:-len('core/BepInEx.Core.dll')] for n in original.namelist() if n.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None,'Embedded BepInEx runtime missing'
+            target=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for item in original.infolist():
+                if item.filename!=target: updated.writestr(item,original.read(item.filename))
+            updated.write(dll,target,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(replacement,asset)
+        print('v4.3.42 game-side host end logic bundled; v4.3.41 name, chat and host-start fixes retained')
+        PY_REBUNDLE_END_4342
+    - name: Fix actual chat visibility and Start button-state API; add opt-in host RPC signature auto-ban
+      shell: bash
+      run: |
+        python3 - <<'PY_PREP_4343'
+        import base64,zlib,pathlib
+        p=pathlib.Path('/tmp/guardian4343');p.mkdir(parents=True,exist_ok=True)
+        (p/'RpcAutoBanGuard.cs').write_bytes(zlib.decompress(base64.b64decode('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')))
+        (p/'patch.py').write_bytes(zlib.decompress(base64.b64decode('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')))
+        PY_PREP_4343
+        python3 /tmp/guardian4343/patch.py
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_PACKAGE_4343'
+        from pathlib import Path
+        import os,zipfile
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(),'Missing Android game runtime or rebuilt plugin DLL'
+        replacement=asset.with_name('guardian4343-bepinex.zip')
+        with zipfile.ZipFile(asset) as old,zipfile.ZipFile(replacement,'w') as new:
+            prefix=next((n[:-len('core/BepInEx.Core.dll')] for n in old.namelist() if n.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None,'Missing BepInEx core in embedded runtime'
+            target=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for i in old.infolist():
+                if i.filename!=target:new.writestr(i,old.read(i.filename))
+            new.write(dll,target,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(replacement,asset)
+        print('v4.3.43 game module compiled and bundled, without altering exit clipboard or host-end feature')
+        PY_PACKAGE_4343
+    - name: Add host connection bot shield, session rejoin tracker and RPC flood protection
+      shell: bash
+      run: |
+        mkdir -p /tmp/guardian4345
+        cat > /tmp/guardian4345/ConnectionBotGuard.cs <<'CS_4345'
+        using System;
+        using System.Collections.Generic;
+        using System.Diagnostics;
+        using System.IO;
+        using System.Linq;
+        using System.Reflection;
+        using System.Text.Json;
+        using BepInEx;
+
+        namespace LobbyGuardian;
+
+        // Host-side lobby admission and traffic monitoring. No forged packets or sender claims.
+        internal static class ConnectionBotGuard
+        {
+            const BindingFlags F=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;
+            static readonly HashSet<byte> Listed=new(){85,101,133,201,202,250};
+            static readonly HashSet<string> Names=new(){"CheckName","SetName","CheckColor","SetColor","SetHatStr","SetSkinStr","SetPetStr","SetVisorStr","SetNamePlateStr","SetLevel"};
+            static readonly Dictionary<byte,string> Mapped=new();
+            static readonly HashSet<byte> VanillaIds=new();
+            static readonly HashSet<byte> Learned=new();
+            static readonly Dictionary<byte,HashSet<string>> Evidence=new();
+            sealed class Traffic { public readonly Queue<long> Handshake=new(), Cosmetic=new(); public readonly Dictionary<byte,RpcBurst> Custom=new(); public long LastSeen, LastVanillaFlag; public int VanillaFlags; }
+            sealed class RpcBurst { public readonly Queue<long> Calls=new(); public long LastFlag; public int Flags; }
+            sealed class Identity { public readonly Queue<long> Cycles=new(); public long LastSeen; public bool Blocked; }
+            sealed class Arrival { public int Id; public string[] Keys=Array.Empty<string>(); public long At; public object? Data; public bool MissingPuid; public string Reason=""; public readonly Dictionary<byte,int> Calls=new(); }
+            static readonly Dictionary<int,Traffic> TrafficByClient=new();
+            static readonly Dictionary<string,Identity> Identities=new(StringComparer.OrdinalIgnoreCase);
+            static readonly Dictionary<int,Arrival> Active=new();
+            static readonly Dictionary<int,Arrival> Pending=new();
+            static readonly Dictionary<string,long> Surge=new(StringComparer.OrdinalIgnoreCase);
+            static readonly HashSet<int> BanRequested=new();
+            static long _configAt,_statusAt,_surgeAt,_lastPrune,_mapAt;
+            static int _room,_joins,_leaves,_missing,_surges,_missingBans,_rpcFlags,_bans,_listedObserved;
+            static bool _host,_record=true,_banRejoin,_banMissing,_banListed,_banVanilla;
+            static bool _reportReview=true;
+            sealed class Review { public string atUtc {get;set;}=""; public string name {get;set;}=""; public string friendCode {get;set;}=""; public string reason {get;set;}=""; public int clientId {get;set;} }
+            static readonly List<Review> ReportReview=new();
+            static readonly HashSet<string> ReviewedKeys=new(StringComparer.OrdinalIgnoreCase);
+            static void QueueReview(Arrival a){try{
+                if(!_reportReview||a.Keys.Length==0||ExemptArrival(a)||ReportReview.Count>=30)return;
+                string key=a.Keys.FirstOrDefault(k=>k.StartsWith("p:"))??a.Keys[0];
+                if(!ReviewedKeys.Add(key))return;
+                var fc=a.Keys.FirstOrDefault(k=>k.StartsWith("f:"));
+                ReportReview.Add(new Review{atUtc=DateTimeOffset.UtcNow.ToString("O"),name=Str(Read(a.Data,"PlayerName")??Read(a.Data,"Name")),friendCode=fc==null?"":fc.Substring(2),clientId=a.Id,reason="Four completed rapid join/leave cycles within six seconds; suspected automation, not proof."});
+            }catch{}}
+            static string _last="Waiting for hosted lobby",_hooks="not registered";
+            static long Now()=>Stopwatch.GetTimestamp();
+            static long Ms(int n)=>Math.Max(1,n*Stopwatch.Frequency/1000);
+            static object? Read(object? o,string key){try{if(o==null)return null;var t=o is Type ty?ty:o.GetType();var r=o is Type?null:o;return t.GetProperty(key,F)?.GetValue(r)??t.GetField(key,F)?.GetValue(r);}catch{return null;}}
+            static int Num(object? o,int fallback=-1)=>int.TryParse(o?.ToString(),out int n)?n:fallback;
+            static string Str(object? o)=>o?.ToString()?.Trim()??"";
+            static string At(string n)=>Path.Combine(Paths.ConfigPath,n);
+            static void Refresh(long now){if(now<_configAt)return;_configAt=now+Ms(1000);try{using var d=JsonDocument.Parse(File.ReadAllText(At("LobbyGuardian-utility-options.json")));var r=d.RootElement;
+                bool On(string k)=>r.TryGetProperty(k,out var x)&&x.ValueKind==JsonValueKind.True;
+                _record=!r.TryGetProperty("RecordConnectionBotActivity",out var x)||x.ValueKind!=JsonValueKind.False;
+                _banRejoin=!r.TryGetProperty("AutoBanRapidRejoin",out var rr)||rr.ValueKind==JsonValueKind.True;
+                _banMissing=!r.TryGetProperty("AutoBanMissingPuid",out var mp)||mp.ValueKind==JsonValueKind.True;
+                _banListed=!r.TryGetProperty("AutoBanListedRpcFlood",out var lr)||lr.ValueKind==JsonValueKind.True;_banVanilla=On("AutoBanVanillaRpcFlood");_reportReview=!r.TryGetProperty("AutoPrepareBotReports",out var ar)||ar.ValueKind!=JsonValueKind.False;
+            }catch{_record=true;_banRejoin=_banMissing=_banListed=true;_banVanilla=false;_reportReview=true;}}
+            static bool Ready(){bool host=GameBridge.IsHost();int room=Num(Read(GameBridge.Client,"GameId"),0);string state=Str(Read(GameBridge.Client,"GameState"));
+                if(host!=_host||room!=_room){_host=host;_room=room;Active.Clear();Pending.Clear();Identities.Clear();Surge.Clear();TrafficByClient.Clear();BanRequested.Clear();Learned.Clear();Evidence.Clear();ReportReview.Clear();ReviewedKeys.Clear();_surgeAt=0;_joins=_leaves=_missing=_surges=_missingBans=_rpcFlags=_bans=_listedObserved=0;}
+                return host&&room!=0&&(state.Equals("Joined",StringComparison.OrdinalIgnoreCase)||state.Equals("Lobby",StringComparison.OrdinalIgnoreCase)||state=="1");}
+            static bool Enabled()=>_record||_banRejoin||_banMissing||_banListed||_banVanilla||_reportReview;
+            static bool Remote(int id)=>id>=0&&id!=Num(Read(GameBridge.Client,"ClientId"))&&id!=Num(Read(GameBridge.Client,"HostId"));
+            static void Trim(Queue<long> q,long now,int ms){while(q.Count>0&&now-q.Peek()>=Ms(ms))q.Dequeue();}
+            static void Add(Queue<long> q,long now,int ms){Trim(q,now,ms);if(q.Count<256)q.Enqueue(now);}
+            static string[] Keys(object data){var fc=Str(Read(data,"FriendCode"));var puid=Str(Read(data,"ProductUserId")??Read(data,"Puid")??Read(data,"ProductUserID"));var keys=new List<string>(2);
+                if(fc.Length>=3&&fc.Length<=128&&fc.Contains('#')&&!fc.Any(char.IsWhiteSpace))keys.Add("f:"+fc);
+                if(puid.Length>=8&&puid.Length<=128&&!puid.Any(char.IsWhiteSpace)&&puid.Any(c=>c!='0'))keys.Add("p:"+puid);
+                return keys.ToArray();}
+            static bool MissingPuid(object data){try{var t=data.GetType();foreach(string key in new[]{"ProductUserId","Puid","ProductUserID"}){var prop=t.GetProperty(key,F);var field=t.GetField(key,F);if(prop==null&&field==null)continue;var value=prop!=null?prop.GetValue(data):field!.GetValue(data);return string.IsNullOrWhiteSpace(value?.ToString());}}catch{}return false;}
+            static bool ExemptArrival(Arrival a){try{var r=RuleStore.LoadOrCreate(At("LobbyGuardian-rules.json"));var name=Str(Read(a.Data,"PlayerName")??Read(a.Data,"Name"));return r.AllowFriendCodes.Any(x=>x.Length>0&&a.Keys.Contains("f:"+x,StringComparer.OrdinalIgnoreCase))||r.AllowPuids.Any(x=>x.Length>0&&a.Keys.Contains("p:"+x,StringComparer.OrdinalIgnoreCase))||r.AllowNamesExact.Any(x=>x.Length>0&&(name.Length==0||x.Equals(name,StringComparison.OrdinalIgnoreCase)));}catch{return true;}}
+            static bool BanArrival(Arrival a){try{
+                if(!Ready()||!Remote(a.Id)||!Active.TryGetValue(a.Id,out var current)||!ReferenceEquals(current,a))return false;
+                if(BanRequested.Contains(a.Id))return true;
+                if(a.Reason=="Missing PUID"&&(!a.MissingPuid||a.Data==null||!MissingPuid(a.Data)))return true;
+                var players=GameBridge.ReadConnectedPlayers().Where(p=>p.ClientId==a.Id&&!p.IsHost&&!p.IsLocal).Take(2).ToArray();
+                if(players.Length>1)return false;
+                if(players.Length==1){var p=players[0];if(Exempt(p)||ExemptArrival(a))return true;
+                    if(a.Reason=="Missing PUID"&&!string.IsNullOrWhiteSpace(p.Puid))return true;
+                    if(a.Reason!="Missing PUID"&&!a.Keys.Any(k=>k.Equals("f:"+p.FriendCode,StringComparison.OrdinalIgnoreCase)||k.Equals("p:"+p.Puid,StringComparison.OrdinalIgnoreCase)))return false;
+                    if(GameBridge.Ban(p)){BanRequested.Add(a.Id);_bans++;if(a.Reason=="Missing PUID")_missingBans++;_last=a.Reason+"; host ban requested";HostExtras.ModerationNotice("ban",p,a.Reason,true);return true;}}
+                // A valid connection callback supplies the client ID before PlayerControl spawns.
+                // Use only the ordinary host kick/ban method, never fabricate a packet.
+                if(ExemptArrival(a))return true;
+                var c=GameBridge.Client;if(c==null)return false;
+                var method=c.GetType().GetMethods(F).FirstOrDefault(m=>m.Name=="KickPlayer"&&!m.IsStatic&&m.GetParameters().Length==2&&m.GetParameters()[0].ParameterType==typeof(int)&&m.GetParameters()[1].ParameterType==typeof(bool));
+                if(method==null){_last="Early host ban API unavailable; retrying connected player lookup";return false;}
+                BanRequested.Add(a.Id);try{var result=method.Invoke(c,new object[]{a.Id,true});if(result is bool ok&&!ok){BanRequested.Remove(a.Id);return false;}}catch{BanRequested.Remove(a.Id);return false;}
+                _bans++;if(a.Reason=="Missing PUID")_missingBans++;_last=a.Reason+"; early host ban requested (server outcome unverified)";return true;
+            }catch{return false;}}
+            static void Learn(Arrival a){if(VanillaIds.Count==0||a.Keys.Length==0)return;string key=a.Keys.FirstOrDefault(k=>k.StartsWith("p:"))??a.Keys[0];
+                foreach(var pair in a.Calls){if(pair.Value<3||VanillaIds.Contains(pair.Key)||Listed.Contains(pair.Key))continue;
+                    if(!Evidence.TryGetValue(pair.Key,out var peers))Evidence[pair.Key]=peers=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    if(peers.Count<32)peers.Add(key);
+                    if(peers.Count>=2)Learned.Add(pair.Key);}}
+            static Identity? Track(string key,long now){if(!Identities.TryGetValue(key,out var v)){if(Identities.Count>=256)return null;Identities[key]=v=new Identity();}v.LastSeen=now;Trim(v.Cycles,now,6000);return v;}
+            static bool Exempt(PlayerIdentity p){try{var r=RuleStore.LoadOrCreate(At("LobbyGuardian-rules.json"));return r.AllowFriendCodes.Any(x=>x.Length>0&&x.Equals(p.FriendCode,StringComparison.OrdinalIgnoreCase))||r.AllowPuids.Any(x=>x.Length>0&&x.Equals(p.Puid,StringComparison.OrdinalIgnoreCase))||r.AllowNamesExact.Any(x=>x.Length>0&&x.Equals(p.Name,StringComparison.OrdinalIgnoreCase));}catch{return true;}}
+            static bool Ban(int id,string reason,string[]? keys=null){if(!Ready()||!Remote(id)||BanRequested.Contains(id))return false;
+                var players=GameBridge.ReadConnectedPlayers().Where(p=>p.ClientId==id&&!p.IsLocal&&!p.IsHost).Take(2).ToArray();if(players.Length!=1)return false;var p=players[0];
+                if(keys!=null&&!keys.Any(k=>k.Equals("f:"+p.FriendCode,StringComparison.OrdinalIgnoreCase)||k.Equals("p:"+p.Puid,StringComparison.OrdinalIgnoreCase)))return false;
+                if(Exempt(p)){_last="Allowlist exemption: "+reason;return true;}BanRequested.Add(id);bool sent=GameBridge.Ban(p);if(sent)_bans++;_last=reason+(sent?"; host ban requested":"; ban unavailable");HostExtras.ModerationNotice("ban",p,reason,sent);return true;}
+            internal static void Hooks(string message)=>_hooks=message;
+            internal static void Joined(object? data){try{long now=Now();Refresh(now);if(data==null||!Ready()||!Enabled())return;int id=Num(Read(data,"Id")??Read(data,"ClientId"));if(!Remote(id)||Active.ContainsKey(id)||Active.Count>=64)return;
+                var keys=Keys(data);var a=new Arrival{Id=id,Keys=keys,At=now,Data=data,MissingPuid=MissingPuid(data)};Active[id]=a;BanRequested.Remove(id);TrafficByClient.Remove(id);_joins++;
+                if(keys.Length<2){_missing++;_last="Join with missing/unvalidated friend code or PUID";}
+                if(a.MissingPuid&&_banMissing){a.Reason="Missing PUID";Pending[id]=a;}
+                foreach(var key in keys){var v=Track(key,now);if(v!=null&&(v.Blocked||v.Cycles.Count>=4)&&_banRejoin){v.Blocked=true;a.Reason="Rapid rejoin session block";Pending[id]=a;}}
+                foreach(var old in Surge.Where(x=>now-x.Value>=Ms(2000)).Select(x=>x.Key).ToArray())Surge.Remove(old);
+                string surgeKey=keys.FirstOrDefault(k=>k.StartsWith("p:"))??keys.FirstOrDefault()??("id:"+id);Surge[surgeKey]=now;
+                if(Surge.Count>=4&&now>=_surgeAt){_surgeAt=now+Ms(2000);_surges++;_last="Join surge: public lobby retained; only individually flagged connections eligible";}
+                if(Pending.ContainsKey(id)&&BanArrival(a))Pending.Remove(id);
+            }catch(Exception e){_last="Join observer: "+e.GetBaseException().GetType().Name;}}
+            internal static void Left(object? data){try{long now=Now();Refresh(now);if(data==null||!Ready()||!Enabled())return;int id=Num(Read(data,"Id")??Read(data,"ClientId"));if(!Active.TryGetValue(id,out var a))return;Active.Remove(id);Pending.Remove(id);TrafficByClient.Remove(id);BanRequested.Remove(id);_leaves++;
+                bool confirmed=false;
+                foreach(var key in a.Keys){var v=Track(key,now);if(v==null||now-a.At>=Ms(1500))continue;Add(v.Cycles,a.At,6000);Trim(v.Cycles,now,6000);if(v.Cycles.Count>=4){if(_banRejoin)v.Blocked=true;confirmed=true;_last="4 rapid join/leave cycles in 6s; next matching arrival eligible for host ban";}}
+                if(confirmed)QueueReview(a);
+                if((confirmed||a.MissingPuid)&&!ExemptArrival(a))Learn(a);
+            }catch(Exception e){_last="Leave observer: "+e.GetBaseException().GetType().Name;}}
+            static void Map(){long now=Now();if(VanillaIds.Count>0||now<_mapAt)return;_mapAt=now+Ms(5000);foreach(var a in AppDomain.CurrentDomain.GetAssemblies()){var t=a.GetType("RpcCalls",false)??a.GetType("InnerNet.RpcCalls",false);if(t==null||!t.IsEnum)continue;foreach(var n in Enum.GetNames(t)){int id=Convert.ToInt32(Enum.Parse(t,n));if(id>=0&&id<=255){VanillaIds.Add((byte)id);if(Names.Contains(n))Mapped[(byte)id]=n;}}if(Mapped.Count>0)return;}}
+            internal static void Observe(object? target,byte id){try{long now=Now();Refresh(now);if(target==null||!Ready()||!Enabled())return;Map();bool listed=(Listed.Contains(id)||Learned.Contains(id))&&!VanillaIds.Contains(id);bool vanilla=Mapped.TryGetValue(id,out var n);int owner=Num(Read(target,"OwnerId")??Read(target,"ownerId"));if(!Remote(owner))return;
+                if(Active.TryGetValue(owner,out var arrival)&&!VanillaIds.Contains(id)){arrival.Calls[id]=Math.Min(256,arrival.Calls.TryGetValue(id,out int count)?count+1:1);}
+                if(!listed&&!vanilla)return;
+                if(!TrafficByClient.TryGetValue(owner,out var v)){if(TrafficByClient.Count>=64)return;TrafficByClient[owner]=v=new Traffic();}v.LastSeen=now;
+                RpcBurst? burst=null;bool listedFlood=false,vanillaFlood=false;if(listed){_listedObserved++;if(!v.Custom.TryGetValue(id,out burst))v.Custom[id]=burst=new RpcBurst();Add(burst.Calls,now,1000);listedFlood=burst.Calls.Count>10;_last="Listed RPC "+id+" observed (object owner "+owner+", not verified bot identity)";}
+                if(vanilla){if(n=="CheckName"||n=="CheckColor"){Add(v.Handshake,now,1000);vanillaFlood=v.Handshake.Count>3;}else{Add(v.Cosmetic,now,1000);vanillaFlood=v.Cosmetic.Count>10;}}
+                // A single burst only records evidence. Repeat in separated windows before opt-in action.
+                if(listedFlood&&burst!=null&&(burst.LastFlag==0||now-burst.LastFlag>=Ms(1000))){
+                    if(now-burst.LastFlag>Ms(10000))burst.Flags=0;burst.LastFlag=now;burst.Flags++;_rpcFlags++;
+                    _last="Listed custom RPC "+id+" flood; inferred object owner "+owner;
+                    if(burst.Flags>=2&&_banListed){if(Active.TryGetValue(owner,out var a)&&(a.MissingPuid||a.Keys.Any(k=>Identities.TryGetValue(k,out var ident)&&ident.Cycles.Count>=2)))Ban(owner,_last,a.Keys.Length>0?a.Keys:null);else _last+="; no independent bot evidence, observation only";burst.Flags=0;}
+                }
+                if(vanillaFlood&&(v.LastVanillaFlag==0||now-v.LastVanillaFlag>=Ms(1000))){
+                    if(now-v.LastVanillaFlag>Ms(10000))v.VanillaFlags=0;v.LastVanillaFlag=now;v.VanillaFlags++;_rpcFlags++;
+                    _last="Handshake/cosmetic flood; inferred object owner "+owner;
+                    if(v.VanillaFlags>=2&&_banVanilla){Ban(owner,_last);v.VanillaFlags=0;}
+                }
+            }catch(Exception e){_last="Traffic observer: "+e.GetBaseException().GetType().Name;}}
+            internal static void Tick(){try{long now=Now();Refresh(now);if(Ready()&&Enabled()){Map();foreach(var a in Pending.Values.ToArray()){if((a.Reason=="Missing PUID"?!_banMissing:!_banRejoin)||now-a.At>=Ms(5000)||BanArrival(a))Pending.Remove(a.Id);}
+                if(now-_lastPrune>=Ms(5000)){_lastPrune=now;foreach(var k in Identities.Where(x=>!x.Value.Blocked&&now-x.Value.LastSeen>Ms(15000)).Select(x=>x.Key).ToArray())Identities.Remove(k);foreach(var k in TrafficByClient.Where(x=>now-x.Value.LastSeen>Ms(15000)).Select(x=>x.Key).ToArray())TrafficByClient.Remove(k);}}
+                if(now<_statusAt)return;_statusAt=now+Ms(3000);File.WriteAllText(At("LobbyGuardian-connection-bot-status.json"),JsonSerializer.Serialize(new{atUtc=DateTimeOffset.UtcNow.ToString("O"),hooks=_hooks,host=_host,detail=_last,joins=_joins,leaves=_leaves,missingIdentity=_missing,surges=_surges,missingPuidBanRequests=_missingBans,listedObserved=_listedObserved,rpcFlags=_rpcFlags,banRequests=_bans,mappedVanilla=Mapped.Count,sessionBlocked=Identities.Count(x=>x.Value.Blocked),listedRpcIds=Listed.OrderBy(x=>x).ToArray(),learnedRpcCandidates=Learned.OrderBy(x=>x).ToArray(),unsupportedRpcIds=new[]{420,42069},reportReviewEnabled=_reportReview,reportReview=ReportReview.ToArray(),notice="Byte IDs only. Inferred owner is not authenticated sender. Learned candidates require corroboration; public lobby retained. Host ban requests are not server confirmations."}));
+            }catch{}}
+        }
+        CS_4345
+        cat > /tmp/guardian4345/patch.py <<'PY_4345'
+        from pathlib import Path
+        p=Path('LobbyGuardian/Plugin')
+        j=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')
+        assert p.is_dir() and j.is_file(), 'Run after v4.3.43 source stage'
+        (p/'ConnectionBotGuard.cs').write_bytes(Path('/tmp/guardian4345/ConnectionBotGuard.cs').read_bytes())
+        def swap(file,before,after):
+            text=file.read_text(encoding='utf-8')
+            assert text.count(before)==1,(str(file),before,text.count(before))
+            file.write_text(text.replace(before,after,1),encoding='utf-8')
+        plugin=p/'LobbyGuardianPlugin.cs'
+        swap(plugin,'    private static void RpcAutoBanProbePrefix(object __instance, byte __0, object __1)', '''    private static void BotJoinedPostfix(object __0) => ConnectionBotGuard.Joined(__0);
+            private static void BotLeftPostfix(object __0) => ConnectionBotGuard.Left(__0);
+            private static void RpcAutoBanProbePrefix(object __instance, byte __0, object __1)''')
+        # Observe once via existing independent incoming-RPC probe. No additional network traffic.
+        swap(plugin,'        RpcAutoBanGuard.Observe(__instance,__0,__1);','        ConnectionBotGuard.Observe(__instance,__0);\n        RpcAutoBanGuard.Observe(__instance,__0,__1);')
+        swap(plugin,'            // Optional UI postfixes: preserve other protections if either cannot patch.', '''            // Connection events, independent of PlayerControl.HandleRpc. Prefer the base
+                    // InnerNetClient callbacks; use the concrete client type only as a fallback.
+                    try {
+                        var types=AppDomain.CurrentDomain.GetAssemblies()
+                            .SelectMany(a=>new[]{a.GetType("InnerNet.InnerNetClient",false),a.GetType("InnerNetClient",false),a.GetType("AmongUsClient",false)})
+                            .Where(t=>t!=null).Distinct().ToArray();
+                        var reports=new System.Collections.Generic.List<string>();
+                        foreach(var item in new[]{(Name:"OnPlayerJoined",Hook:nameof(BotJoinedPostfix)),(Name:"OnPlayerLeft",Hook:nameof(BotLeftPostfix))}){
+                            var method=types.SelectMany(t=>t!.GetMethods(BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance))
+                                .FirstOrDefault(m=>m.Name==item.Name&&m.GetParameters().Length>=1&&m.GetParameters()[0].ParameterType.Name=="ClientData");
+                            if(method==null){reports.Add(item.Name+": missing compatible ClientData callback");continue;}
+                            TryPatch(method,item.Hook);
+                            reports.Add(item.Name+": patch attempted on "+method.DeclaringType?.Name);
+                        }
+                        ConnectionBotGuard.Hooks(string.Join("; ",reports));
+                    }catch(Exception ex){ConnectionBotGuard.Hooks("Connection hook error: "+ex.GetType().Name);}
+                    // Optional UI postfixes: preserve other protections if either cannot patch.''')
+        swap(plugin,'BotShield.Tick(); RpcAutoBanGuard.Tick();','BotShield.Tick(); RpcAutoBanGuard.Tick(); ConnectionBotGuard.Tick();')
+        swap(j,'        button(a,p,"Observed RPC IDs, signatures and ban requests",()->{','''        title(a,p,"Host • Connection flood and custom RPC guard",
+                    "Records suspicious traffic and rapid reconnects. Detection is not proof of bot identity. Only the host may request bans. Lobby visibility is never changed.");
+                check(a,p,"Record join/leave and suspicious RPCs","Includes missing friend code/PUID, listed RPCs, handshake and cosmetics",UTILITY,"RecordConnectionBotActivity",true);
+                check(a,p,"Auto-ban rapid rejoin bots (HOST)","4 completed rapid cycles in 6s; next matching arrival; session-only tracking",UTILITY,"AutoBanRapidRejoin",true);
+                check(a,p,"Auto-ban missing PUID (HOST)","Strict admission rule; missing PUID can also occur for legitimate clients; allowlist respected",UTILITY,"AutoBanMissingPuid",true);
+                check(a,p,"Auto-ban repeated listed RPC floods (HOST)","85, 101, 133, 201, 202, 250 + learned candidates; repeated same-ID flood plus admission evidence",UTILITY,"AutoBanListedRpcFlood",true);
+                check(a,p,"Auto-ban repeated handshake/cosmetic floods (HOST)","Over 3 name/color checks or 10 cosmetic RPCs in 1s; repeat before ban",UTILITY,"AutoBanVanillaRpcFlood",false);
+                check(a,p,"Auto-prepare suspected bot reports (HOST)","Local review only: four rapid join/leave cycles in six seconds; no automatic submission.",UTILITY,"AutoPrepareBotReports",true);
+                button(a,p,"Review suspected bot reports",()->{
+                    JSONObject d=json(path(a,"LobbyGuardian-connection-bot-status.json"));
+                    org.json.JSONArray entries=d.optJSONArray("reportReview");
+                    StringBuilder out=new StringBuilder("Review evidence before reporting through the official game menu. No report has been submitted.");
+                    if(entries==null||entries.length()==0)out.append("\\n\\nNo candidates recorded.");
+                    else for(int i=0;i<entries.length();i++){
+                        JSONObject e=entries.optJSONObject(i);if(e==null)continue;
+                        out.append("\\n\\nPlayer: ").append(e.optString("name","Unknown"))
+                           .append(" | Friend code: ").append(e.optString("friendCode",""))
+                           .append("\\n").append(e.optString("atUtc",""))
+                           .append("\\n").append(e.optString("reason",""));
+                    }
+                    alert(a,"Suspected bot report review",out.toString());
+                });
+                button(a,p,"Connection bot and RPC diagnostics",()->{
+                    JSONObject d=json(path(a,"LobbyGuardian-connection-bot-status.json"));
+                    alert(a,"Connection bot guard",
+                        "Hooks: "+d.optString("hooks","Awaiting plugin")+
+                        "\\n"+d.optString("detail","Awaiting data")+
+                        "\\nJoins: "+d.optInt("joins",0)+" • Leaves: "+d.optInt("leaves",0)+
+                        "\\nIdentity warnings: "+d.optInt("missingIdentity",0)+" • Session blocks: "+d.optInt("sessionBlocked",0)+
+                        "\\nSurges: "+d.optInt("surges",0)+" • Missing PUID bans requested: "+d.optInt("missingPuidBanRequests",0)+
+                        "\\nLearned RPC candidates: "+d.optString("learnedRpcCandidates","[]")+
+                        "\\nListed RPCs observed: "+d.optInt("listedObserved",0)+" • Flood flags: "+d.optInt("rpcFlags",0)+
+                        "\\nBan requests: "+d.optInt("banRequests",0)+" • Mapped vanilla IDs: "+d.optInt("mappedVanilla",0)+
+                        "\\n420 and 42069 exceed the byte RPC range; cannot be matched by this hook.");
+                });
+                button(a,p,"Observed RPC IDs, signatures and ban requests",()->{''')
+        # Keep existing signature and join/UI paths intact, but correct outdated status copy.
+        swap(j,'MMC has no verified public fingerprint; custom/unknown RPCs are logged, NOT auto-banned.','MMC 201/202 are user-reported candidates; separate optional repeated-flood rules are below.')
+        print('v4.3.45 connection-event guard, listed-ID and known vanilla flood rules integrated')
+        PY_4345
+        python3 /tmp/guardian4345/patch.py
+        cat > /tmp/guardian4345/meeting_patch.py <<'PY_MEETING'
+        from pathlib import Path
+        p=Path('LobbyGuardian/Plugin')
+        shield=p/'HostResilienceShield.cs'
+        plugin=p/'LobbyGuardianPlugin.cs'
+        java=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')
+        def swap(path,before,after):
+            s=path.read_text(encoding='utf8')
+            assert s.count(before)==1,(str(path),before,s.count(before))
+            path.write_text(s.replace(before,after,1),encoding='utf8')
+        swap(shield,'    private static readonly Dictionary<byte,string> Relevant=new();','''    private static readonly Dictionary<byte,string> Relevant=new();
+            private static readonly Dictionary<byte,string> LobbyMeetingKinds=new();
+            private static bool _meetingEnabled=true;
+            private static int _meetingDrops;
+            private static long _nextMeetingWarn;
+            private static string _meetingDetail="No invalid lobby meeting request blocked";''')
+        swap(shield,'''                if(!Known(name))continue;
+                        try{
+                            int id=Convert.ToInt32(Enum.Parse(t,name));
+                            if(id>=0&&id<=255)Relevant[(byte)id]=name;
+                        }catch{}''','''                if(!Known(name)&&name!="ReportDeadBody"&&name!="StartMeeting")continue;
+                        try{
+                            int id=Convert.ToInt32(Enum.Parse(t,name));
+                            if(id<0||id>255)continue;
+                            if(name=="ReportDeadBody"||name=="StartMeeting")LobbyMeetingKinds[(byte)id]=name;
+                            else Relevant[(byte)id]=name;
+                        }catch{}''')
+        swap(shield,'    internal static bool BeforeRpc(object? target,byte rpc)','''    // Reject known meeting RPCs only in the pre-game state of a hosted room.
+            // Object ownership is NOT authenticated packet sender identity, so do not ban here.
+            internal static bool BeforeLobbyMeetingRpc(object? target,byte rpc)
+            {
+                try{
+                    if(target==null||!_meetingEnabled||!_enabled||!GameBridge.IsHost())return true;
+                    var client=GameBridge.Client;
+                    var state=Read(client,"GameState")?.ToString()??"";
+                    if(!state.Equals("Joined",StringComparison.OrdinalIgnoreCase)&&
+                       !state.Equals("Lobby",StringComparison.OrdinalIgnoreCase))return true;
+                    if(!int.TryParse(Read(client,"GameId")?.ToString(),out int room)||room==0)return true;
+                    if(!LobbyMeetingKinds.TryGetValue(rpc,out var name))return true;
+                    _meetingDrops++;
+                    _meetingDetail="Blocked pre-game "+name+" locally; sender not authenticated";
+                    long now=Now();
+                    if(now>=_nextMeetingWarn){
+                        _nextMeetingWarn=now+Milliseconds(9000);
+                        try{HostExtras.Warn("Guardian: invalid lobby meeting blocked", "host-resilience");}catch{}
+                    }
+                    return false;
+                }catch{return true;}
+            }
+            internal static bool BeforeRpc(object? target,byte rpc)''')
+        swap(shield,'            _enabled=!r.TryGetProperty("AdvancedHostShield",out var v)||v.ValueKind!=JsonValueKind.False;','''            _enabled=!r.TryGetProperty("AdvancedHostShield",out var v)||v.ValueKind!=JsonValueKind.False;
+                    _meetingEnabled=!r.TryGetProperty("AntiLobbyMeeting",out var meet)||meet.ValueKind!=JsonValueKind.False;''')
+        swap(shield,'        }catch{_enabled=true;}','        }catch{_enabled=true;_meetingEnabled=true;}')
+        swap(shield,'            locallySuppressedCalls=_drop,warningCount=_alerts,selfTests=_tests,','''            locallySuppressedCalls=_drop,warningCount=_alerts,selfTests=_tests,
+                    meetingGuardEnabled=_enabled&&_meetingEnabled,meetingMappedKinds=LobbyMeetingKinds.Count,
+                    blockedLobbyMeetings=_meetingDrops,meetingDetail=_meetingDetail,''')
+        swap(shield,'if(room!=_room){Slots.Clear();_room=room;_drop=0;_samples=0;}','if(room!=_room){Slots.Clear();_room=room;_drop=0;_samples=0;_meetingDrops=0;_nextMeetingWarn=0;_meetingDetail="No invalid lobby meeting request blocked";}')
+        swap(plugin,'        if (!InboundTrafficShield.BeforeRpc(__instance,__0)) return false;','''        if (!HostResilienceShield.BeforeLobbyMeetingRpc(__instance,__0)) return false;
+                if (!InboundTrafficShield.BeforeRpc(__instance,__0)) return false;''')
+        swap(java,'        button(a,p,"Host anti-crash live diagnostic",()->{','''        check(a,p,"Anti-meeting crash (HOST)","Reject known meeting RPCs before the match starts; legitimate in-game meetings unaffected. No ban without verified sender.",
+                    UTILITY,"AntiLobbyMeeting",true);
+                button(a,p,"Host anti-crash live diagnostic",()->{''')
+        swap(java,r'                "\nLocally suppressed calls: "+d.optInt("locallySuppressedCalls",0)+',r'''                "\nLocally suppressed calls: "+d.optInt("locallySuppressedCalls",0)+
+                        "\nMeeting guard enabled: "+d.optBoolean("meetingGuardEnabled",false)+
+                        " | Mapped meeting types: "+d.optInt("meetingMappedKinds",0)+
+                        "\nBlocked lobby meetings: "+d.optInt("blockedLobbyMeetings",0)+
+                        "\n"+d.optString("meetingDetail","Awaiting game status")+''')
+        print('v4.3.47 meeting guard source integrated; prior bot guard preserved')
+        PY_MEETING
+        python3 /tmp/guardian4345/meeting_patch.py
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_PACKAGE_4345'
+        from pathlib import Path
+        import os,zipfile
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(),'Missing Android game runtime or rebuilt plugin DLL'
+        replacement=asset.with_name('guardian4345-bepinex.zip')
+        with zipfile.ZipFile(asset) as old,zipfile.ZipFile(replacement,'w') as new:
+            prefix=next((n[:-len('core/BepInEx.Core.dll')] for n in old.namelist() if n.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None,'Missing BepInEx core in embedded runtime'
+            target=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for i in old.infolist():
+                if i.filename!=target:new.writestr(i,old.read(i.filename))
+            new.write(dll,target,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(replacement,asset)
+        print('v4.3.47 connection bot and meeting guard compiled and bundled')
+        PY_PACKAGE_4345
+    - name: Repair host bot callbacks, roster fallback, alerts and friend code policy
+      shell: bash
+      run: |
+        python3 - <<'PY_FIX48'
+        from pathlib import Path
+        import base64,zlib,subprocess
+        patch=zlib.decompress(base64.b64decode('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'))
+        p=Path('/tmp/guardian4348.patch');p.write_bytes(patch)
+        subprocess.run(['patch','--dry-run','-p1','-i',str(p)],check=True)
+        subprocess.run(['patch','-p1','-i',str(p)],check=True)
+        PY_FIX48
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore
+        python3 - <<'PY_PACKAGE_4345'
+        from pathlib import Path
+        import os,zipfile
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(),'Missing Android game runtime or rebuilt plugin DLL'
+        replacement=asset.with_name('guardian4345-bepinex.zip')
+        with zipfile.ZipFile(asset) as old,zipfile.ZipFile(replacement,'w') as new:
+            prefix=next((n[:-len('core/BepInEx.Core.dll')] for n in old.namelist() if n.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None,'Missing BepInEx core in embedded runtime'
+            target=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for i in old.infolist():
+                if i.filename!=target:new.writestr(i,old.read(i.filename))
+            new.write(dll,target,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(replacement,asset)
+        print('v4.3.48 connection bot and meeting guard compiled and bundled')
+        PY_PACKAGE_4345
+    - name: Consolidate host bot and RPC controls into two buttons
+      shell: bash
+      run: |
+        python3 - <<'PY_GROUP49'
+        from pathlib import Path
+        p=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')
+        s=p.read_text()
+        anchor='    public static void addHostResilience(Activity a,LinearLayout p){'
+        helper='''    private static final String[] BOT_CORE={"RecordRpcActivity","RecordConnectionBotActivity",
+                "AutoBanRapidRejoin","AutoBanDigitFriendCode","AutoBanMissingPuid","AutoBanListedRpcFlood","AutoPrepareBotReports"};
+            private static final String[] BOT_OPTIONAL={"AutoBanKnownRpcFingerprint","AutoBanExtremeRpcFlood","AutoBanVanillaRpcFlood"};
+            private static String botMode(Activity a){
+                JSONObject o=json(path(a,UTILITY));int n=0;
+                for(String key:BOT_CORE)if(o.optBoolean(key,true))n++;
+                boolean extra=false;for(String key:BOT_OPTIONAL)extra|=o.optBoolean(key,false);
+                return n==BOT_CORE.length?"ON":n==0&&!extra?"OFF":"MIXED";
+            }
+            private static boolean setBotGroup(Activity a,boolean on){
+                try{
+                    File f=path(a,UTILITY),parent=f.getParentFile();if(parent!=null&&!parent.isDirectory())parent.mkdirs();
+                    JSONObject o=json(f);
+                    for(String key:BOT_CORE)o.put(key,on);
+                    // Riskier rules remain opt-in. Turning protection off disables all of them.
+                    if(!on)for(String key:BOT_OPTIONAL)o.put(key,false);
+                    File temp=new File(parent,f.getName()+".group.tmp");
+                    try(FileOutputStream out=new FileOutputStream(temp,false)){
+                        out.write(o.toString().getBytes(StandardCharsets.UTF_8));out.getFD().sync();
+                    }
+                    if(!temp.renameTo(f)){temp.delete();throw new java.io.IOException("Settings rename failed");}
+                    return true;
+                }catch(Exception e){Toast.makeText(a,"Bot settings could not be saved",Toast.LENGTH_LONG).show();return false;}
+            }
+            private static void advancedBotRules(Activity a,Runnable refresh){
+                String[] labels={"Repeated known RPC fingerprints","Repeated extreme RPC floods","Repeated handshake/cosmetic floods"};
+                boolean[] selected=new boolean[BOT_OPTIONAL.length];
+                JSONObject o=json(path(a,UTILITY));for(int i=0;i<selected.length;i++)selected[i]=o.optBoolean(BOT_OPTIONAL[i],false);
+                new AlertDialog.Builder(a).setTitle("Optional RPC auto-ban rules (host)")
+                    .setMultiChoiceItems(labels,selected,(dialog,which,on)->selected[which]=on)
+                    .setNegativeButton("Cancel",null).setPositiveButton("Apply",(dialog,which)->{
+                        for(int i=0;i<selected.length;i++)set(a,UTILITY,BOT_OPTIONAL[i],selected[i]);
+                        refresh.run();
+                    }).show();
+            }
+        '''
+        assert s.count(anchor)==1
+        s=s.replace(anchor,helper+anchor)
+        start=s.index('        title(a,p,"Host • RPC signature bot detection",')
+        end=s.index('        button(a,p,"Review suspected bot reports",',start)
+        s=s[:start]+'''        title(a,p,"Host • Bot & RPC protection",
+                    "One switch for detection, rapid rejoin, Friend Code and PUID rules, listed RPC floods, alerts and report review. Host only; lobby stays public. Optional higher-risk rules remain opt-in.");
+                Button master=new Button(a);master.setAllCaps(false);master.setTextColor(FG);master.setTextSize(14);
+                p.addView(master,new LinearLayout.LayoutParams(-1,-2));
+                Runnable refreshBotLabel=()->master.setText("Bot & RPC protection: "+botMode(a));
+                refreshBotLabel.run();
+                master.setOnClickListener(v->{
+                    boolean on=!botMode(a).equals("ON");
+                    if(setBotGroup(a,on)){refreshBotLabel.run();Toast.makeText(a,on?"Bot protection enabled":"Bot protection disabled",Toast.LENGTH_SHORT).show();}
+                });
+        '''+s[end:]
+        for label,var in [('Review suspected bot reports','reviewReports'),('Connection bot and RPC diagnostics','connectionDiagnostics'),('Observed RPC IDs, signatures and ban requests','rpcDiagnostics')]:
+            old=f'        button(a,p,"{label}",()->{{'
+            assert s.count(old)==1
+            a=s.index(old);b=s.index('\n        });',a)
+            s=s[:a]+f'        Runnable {var}=()->{{'+s[a+len(old):b]+'\n        };'+s[b+len('\n        });'):]
+        anchor='        check(a,p,"Anti-meeting crash (HOST)"'
+        pos=s.index(anchor)
+        s=s[:pos]+'''        button(a,p,"Bot diagnostics & reports",()->new AlertDialog.Builder(a)
+                    .setTitle("Bot diagnostics & reports")
+                    .setItems(new String[]{"Live connection / hook diagnostics","Observed RPC IDs and ban requests","Review suspected bot reports","Optional RPC auto-ban rules"},(dialog,which)->{
+                        switch(which){case 0:connectionDiagnostics.run();break;case 1:rpcDiagnostics.run();break;
+                            case 2:reviewReports.run();break;case 3:advancedBotRules(a,refreshBotLabel);break;}
+                    }).setNegativeButton("Close",null).show());
+        '''+s[pos:]
+        assert s.count('Button master=new Button(a)')==1
+        assert s.count('button(a,p,"Bot diagnostics & reports"')==1
+        assert 'check(a,p,"Auto-ban rapid rejoin bots' not in s
+        p.write_text(s)
+        PY_GROUP49
+    - name: Replace raw bot diagnostics with readable status and review screen
+      shell: bash
+      run: |
+        python3 - <<'PY_READABLE50'
+        from pathlib import Path
+        p=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')
+        s=p.read_text()
+        anchor='    public static void addHostResilience(Activity a,LinearLayout p){'
+        helper=r'''    private static boolean freshBotStatus(File f,JSONObject data){
+                long age=System.currentTimeMillis()-f.lastModified();
+                return data.has("atUtc")&&age>=0&&age<=15000;
+            }
+            private static String callbackState(JSONObject d,String key,String hook){
+                if(d.optInt(key,0)>0)return "Events received";
+                if(d.optString("hooks","").contains(hook+": registered"))return "Connected; waiting for events";
+                return "Not confirmed; may miss events";
+            }
+            private static String prettyBotEvent(String detail){
+                if(detail==null||detail.isEmpty())return "No event details available.";
+                return detail.replace("PUID","player account ID").replace("Friend Code prefix","Friend Code before #")
+                    .replace("inferred object owner","possible player (not verified)")
+                    .replace("sender unverified","sender not verified");
+            }
+            private static void showReadableBotDiagnostics(Activity a,Runnable reports,Runnable technical,Runnable rules){
+                File cf=path(a,"LobbyGuardian-connection-bot-status.json"),rf=path(a,"LobbyGuardian-rpc-guard-status.json");
+                JSONObject d=json(cf),r=json(rf);
+                boolean live=freshBotStatus(cf,d),rpcLive=freshBotStatus(rf,r);
+                String mode=botMode(a);StringBuilder b=new StringBuilder();
+                b.append("Protection settings: ").append(mode).append("\n");
+                if(!live)b.append("Status: No recent connection detector update. Start the game and host a lobby, then refresh.\n");
+                else if(!d.optBoolean("host",false))b.append("Status: Waiting for you to host a lobby.\n");
+                else b.append("Status: Game detector is responding. Detection is not yet proven for all bots.\n");
+                if(live){
+                    b.append("\nDETECTOR HEALTH\n");
+                    b.append("Player joins: ").append(callbackState(d,"joinCallbacks","OnPlayerJoined")).append("\n");
+                    b.append("Player leaves: ").append(callbackState(d,"leaveCallbacks","OnPlayerLeft")).append("\n");
+                    b.append("Backup player scan: ").append(d.optInt("rosterJoins",0)>0?"Players found":"No backup joins observed yet").append("\n");
+                    b.append("Network traffic (RPC): ");
+                    if(!rpcLive)b.append("No recent RPC monitor update");
+                    else if(d.optInt("rpcCallbacks",0)>0||r.optInt("observedRpcCalls",0)>0)b.append("Traffic received; sender may be unverified");
+                    else if(r.optString("stage","").equals("observer-hook-unavailable"))b.append("Receive hook unavailable");
+                    else if(r.optString("stage","").equals("observer-hook-registered"))b.append("Connected; waiting for traffic");
+                    else b.append("No traffic observed yet; not verified");
+                    b.append("\n\nLOBBY ACTIVITY\nPlayers joined: ").append(d.optInt("joins",0));
+                    b.append("\nPlayers left: ").append(d.optInt("leaves",0));
+                    b.append("\nRapid-rejoin identities blocked: ").append(d.optInt("sessionBlocked",0)).append(" (may include multiple IDs for one player)");
+                    b.append("\nSuspicious Friend Codes: ").append(d.optInt("digitCodeFlags",0));
+                    b.append("\nMissing or invalid identity warnings: ").append(d.optInt("missingIdentity",0));
+                    b.append("\nSuspicious network floods: ").append(d.optInt("rpcFlags",0));
+                    b.append("\nConnection guard ban requests: ").append(d.optInt("banRequests",0));
+                    b.append("\nMissing account ID ban requests: ").append(d.optInt("missingPuidBanRequests",0)).append(" (included above)");
+                    JSONArray entries=d.optJSONArray("reportReview");
+                    b.append("\nReports waiting for review: ").append(entries==null?0:entries.length());
+                    b.append("\n\nLATEST CONNECTION MESSAGE\n").append(prettyBotEvent(d.optString("detail","")));
+                }
+                if(rpcLive){
+                    b.append("\n\nNETWORK MONITOR\nNetwork calls observed: ").append(r.optInt("observedRpcCalls",0));
+                    b.append("\nSignature matches: ").append(r.optInt("signatureMatches",0));
+                    b.append("\nSeparate RPC guard ban requests: ").append(r.optInt("banRequests",0));
+                    b.append("\nLatest message: ").append(prettyBotEvent(r.optString("detail","")));
+                }
+                b.append("\n\nBan requests are not confirmation that a player was banned. Zero detections does not prove the lobby is bot-free. Settings ON does not prove the hooks work.");
+                b.append("\nProtection does not change lobby privacy. Reports require manual review and submission.");
+                LinearLayout panel=new LinearLayout(a);panel.setOrientation(LinearLayout.VERTICAL);
+                panel.setPadding(dp(a,18),dp(a,10),dp(a,18),dp(a,10));
+                TextView info=new TextView(a);info.setTextSize(15);info.setText(b.toString());info.setTextColor(FG);
+                panel.setBackgroundColor(Color.rgb(32,35,49));panel.addView(info,new LinearLayout.LayoutParams(-1,-2));
+                android.widget.ScrollView scroll=new android.widget.ScrollView(a);scroll.addView(panel);
+                AlertDialog dialog=new AlertDialog.Builder(a).setTitle("Bot protection diagnostics").setView(scroll)
+                    .setPositiveButton("Refresh",(x,y)->showReadableBotDiagnostics(a,reports,technical,rules))
+                    .setNegativeButton("Close",null).create();
+                button(a,panel,"Review suspected bot reports",()->{dialog.dismiss();reports.run();});
+                button(a,panel,"Technical details (RPC IDs)",()->{dialog.dismiss();technical.run();});
+                button(a,panel,"Optional RPC rules",()->{dialog.dismiss();rules.run();});
+                dialog.show();
+            }
+        '''
+        assert s.count(anchor)==1
+        s=s.replace(anchor,helper+anchor)
+        start=s.index('        button(a,p,"Bot diagnostics & reports",()->new AlertDialog.Builder(a)')
+        end=s.index('        check(a,p,"Anti-meeting crash (HOST)"',start)
+        s=s[:start]+'''        button(a,p,"Bot diagnostics & reports",()->showReadableBotDiagnostics(a,reviewReports,
+                    ()->new AlertDialog.Builder(a).setTitle("Technical diagnostics")
+                        .setItems(new String[]{"Connection callbacks and counters","RPC IDs and raw counters"},(dialog,which)->{
+                            if(which==0)connectionDiagnostics.run();else rpcDiagnostics.run();
+                        }).setNegativeButton("Close",null).show(),()->advancedBotRules(a,refreshBotLabel)));
+        '''+s[end:]
+        assert s.count('button(a,p,"Bot diagnostics & reports"')==1
+        assert s.count('Button master=new Button(a)')==1
+        p.write_text(s)
+        PY_READABLE50
+    - name: Harden early connection checks and local inbound flood protection; readable diagnostics
+      shell: bash
+      run: |
+        python3 - <<'PY_GUARD51'
+        from pathlib import Path
+        import subprocess,base64,zlib
+        patch=zlib.decompress(base64.b64decode('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'))
+        subprocess.run(['patch','--batch','--forward','-p1'],input=patch,check=True)
+        print('Applied v4.3.51 host connection and local safety improvements')
+        PY_GUARD51
+    - name: Build v4.3.51 Android APK
+      shell: bash
+      run: |
+        python3 - <<'PY_BUILD'
+        from pathlib import Path
+        import subprocess,yaml,tempfile
+        old=yaml.safe_load(Path('.github/workflows/lobbyguardian-v4338-fix-ghost-chat-alwayschat-ghosts-vents-spoof.yml').read_text(encoding='utf8'))
+        steps=old['jobs']['android']['steps']
+        item=next(s for s in steps if s.get('name')=='Build v4.3.38 Android candidate APK')
+        assert item.get('run'), 'Missing v4.3.38 APK packaging script'
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False) as temp:
+            temp.write(item['run'])
+            script_file=temp.name
+        try:
+            subprocess.run(['bash','-eo','pipefail',script_file],check=True)
+        finally:
+            Path(script_file).unlink(missing_ok=True)
+        print('v4.3.51 Android APK assembly completed')
+        PY_BUILD
+    - name: Upload v4.3.51 Android APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.51-Android-EarlyConnectionDefense
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload v4.3.51 plugin source and diagnostics
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.51-Sources-Diagnostics
+        path: |
+          LobbyGuardian/Plugin/*.cs
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+          LobbyGuardian/Plugin/HostResilienceShield.cs
+          LobbyGuardian/Plugin/HostEndGame.cs
+          LobbyGuardian/Plugin/RpcAutoBanGuard.cs
+        if-no-files-found: error
