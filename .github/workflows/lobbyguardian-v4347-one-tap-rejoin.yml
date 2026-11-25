@@ -1,0 +1,111 @@
+name: LobbyGuardian v4.3.47 - One-tap manual rejoin
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4347-one-tap-rejoin.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout original repo
+      uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Recreate original v4.3.47 source stages
+      shell: bash
+      run: "python3 - <<'PY_BASE'\nfrom pathlib import Path\nimport subprocess, tempfile,\
+        \ yaml\nold=Path('.github/workflows/lobbyguardian-v4347-report-review.yml')\n\
+        steps=yaml.safe_load(old.read_text())['jobs']['android']['steps']\nfor step\
+        \ in steps:\n    name=step.get('name','')\n    if name=='Build v4.3.47 Android\
+        \ APK': break\n    if not step.get('run') or name=='Install PyYAML': continue\n\
+        \    print('>>> '+name,flush=True)\n    with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False)\
+        \ as f:\n        f.write(step['run']); script=f.name\n    try: subprocess.run(['bash','-eo','pipefail',script],check=True)\n\
+        \    finally: Path(script).unlink(missing_ok=True)\nelse: raise RuntimeError('Missing\
+        \ original v4.3.47 build anchor')\nPY_BASE"
+    - name: Remove only the Lobby tab rejoin confirmation
+      shell: bash
+      run: 'python3 - <<''PY_PATCH''
+
+        from pathlib import Path
+
+        import hashlib
+
+        p=Path(''fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java'')
+
+        s=p.read_text(encoding=''utf8'')
+
+        old=''                    new AlertDialog.Builder(activity).setTitle("Leave
+        and return?")\n                        .setMessage("Leave normally and rejoin
+        this room once using the game matchmaking flow. Room must still accept entries.")\n                        .setNegativeButton("Cancel",null)\n                        .setPositiveButton("Rejoin
+        now",(d,w)->queueCurrentRoomRejoin(activity))\n                        .show();''
+
+        new=''                    queueCurrentRoomRejoin(activity);''
+
+        assert s.count(old)==1, ''Expected original confirmation dialog exactly once''
+
+        anchor=''actionButton(activity,lobbies,"LEAVE + REJOIN CURRENT ROOM"''
+
+        a=s.index(anchor); b=s.index(''section(activity, overview,'',a)
+
+        assert old in s[a:b], ''Confirmation must belong to Lobby tab current-room
+        action''
+
+        assert ''if(!r.optBoolean("lobby",false))'' in s[a:b], ''Existing lobby guard
+        missing''
+
+        runtime=Path(''LobbyGuardian/Plugin/ClientFeatures.cs'')
+
+        assert hashlib.sha256(runtime.read_bytes()).hexdigest()==''31d70980a901b636d85e6d2ba1abeae4f32c7a7045d974fa542ac9bb5713cc70'',
+        ''Not the archived v4.3.47 client runtime''
+
+        result=s.replace(old,new,1)
+
+        i=s.index(old)
+
+        assert result[:i]==s[:i] and result[i+len(new):]==s[i+len(old):]
+
+        p.write_text(result,encoding=''utf8'')
+
+        assert ''Leave and return?'' not in result
+
+        assert hashlib.sha256(runtime.read_bytes()).hexdigest()==''31d70980a901b636d85e6d2ba1abeae4f32c7a7045d974fa542ac9bb5713cc70''
+
+        print(''Only the current-room confirmation dialog was removed; original runtime
+        unchanged'')
+
+        PY_PATCH
+
+        '
+    - name: Build original Android app with one-tap rejoin
+      run: 'chmod +x gradlew
+
+        ./gradlew :fusionApp:assembleDebug --stacktrace'
+    - name: Check packaged menu and runtime
+      shell: bash
+      run: "python3 - <<'PY_VERIFY'\nfrom pathlib import Path\nimport zipfile,io\n\
+        apks=list(Path('fusionApp/build/outputs/apk/debug').glob('*.apk'))\nassert\
+        \ apks, 'Missing APK'\nasset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')\n\
+        for apk in apks:\n    with zipfile.ZipFile(apk) as z:\n        assert z.read('assets/BepInEx-arm64.zip')==asset.read_bytes(),\
+        \ 'Unexpected runtime payload'\n        dex=b''.join(z.read(n) for n in z.namelist()\
+        \ if n.endswith('.dex'))\n        assert b'LEAVE + REJOIN CURRENT ROOM' in\
+        \ dex\n        assert b'Leave and return?' not in dex\n        assert b'rejoin-current'\
+        \ in dex\n    print('APK menu verified; original runtime asset preserved:',apk.name)\n\
+        PY_VERIFY"
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.47-OneTapRejoin
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
