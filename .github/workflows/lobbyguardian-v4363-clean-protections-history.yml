@@ -1,0 +1,193 @@
+name: Lobby Guardian v4.3.63 - Clean Protections and History
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4363-clean-protections-history.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout FusionCore
+      uses: actions/checkout@v4
+    - name: Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: .NET 10
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - name: Gradle
+      uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Replay v4.3.62 source stages
+      shell: bash
+      run: |-
+        python3 - <<'PY_REPLAY'
+        from pathlib import Path
+        import subprocess, tempfile, yaml
+        old=Path('.github/workflows/lobbyguardian-v4362-bot-observation-toggle.yml')
+        assert old.is_file(), 'v4.3.62 workflow required in same repository'
+        steps=yaml.safe_load(old.read_text())['jobs']['android']['steps']
+        for step in steps:
+            name=step.get('name','')
+            if name=='Build v4.3.62 Android APK': break
+            if not step.get('run') or name=='Install PyYAML': continue
+            print('>>> '+name,flush=True)
+            with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False) as f:
+                f.write(step['run']); filename=f.name
+            try: subprocess.run(['bash','-eo','pipefail',filename],check=True)
+            finally: Path(filename).unlink(missing_ok=True)
+        else: raise RuntimeError('Build anchor not found')
+        PY_REPLAY
+    - name: Separate protection controls and restore history
+      shell: bash
+      run: |-
+        python3 - <<'PY_4363'
+        from pathlib import Path
+        import re
+        root=Path('LobbyGuardian/Plugin')
+        def replace(s,old,new):
+            assert s.count(old)==1, (old[:150],s.count(old))
+            return s.replace(old,new,1)
+        q=root/'HostModerationQueue.cs';s=q.read_text()
+        s=replace(s,'public bool BotRule;','public bool BotRule; public bool HackerRule;')
+        s=replace(s,'autoEnabled,botEnabled;','autoEnabled,botEnabled,hackerEnabled;')
+        s=replace(s,'digitEnabled=botEnabled;','digitEnabled=botEnabled;hackerEnabled=d.RootElement.TryGetProperty("AutoBanHackers",out var hackers)&&hackers.ValueKind==JsonValueKind.True;')
+        s=replace(s,'botEnabled=false;}','botEnabled=false;hackerEnabled=false;}')
+        s=replace(s,'    internal static bool EnqueueBotAction','    internal static bool HackerAutoBanEnabled(){lock(Gate){AutomaticEnabled();return hackerEnabled;}}\n    internal static bool EnqueueHackerAction(PlayerIdentity p,bool ban)=>Enqueue(p,ban,false,false,false,true);\n    internal static bool EnqueueBotAction')
+        s=replace(s,'bool botRule=false)','bool botRule=false,bool hackerRule=false)')
+        s=replace(s,'(botRule&&!BotAutoBanEnabled())||!(digitRule?DigitRuleAvailable():AutomaticEnabled())','(botRule&&!BotAutoBanEnabled())||(hackerRule&&!HackerAutoBanEnabled())||!(digitRule?DigitRuleAvailable():botRule?BotAutoBanEnabled():hackerRule?HackerAutoBanEnabled():AutomaticEnabled())')
+        s=replace(s,'existing.BotRule!=botRule)','existing.BotRule!=botRule||existing.HackerRule!=hackerRule)')
+        s=replace(s,'BotRule=botRule,At=now','BotRule=botRule,HackerRule=hackerRule,At=now')
+        s=replace(s,'botAutoBanEnabled=botEnabled,','botAutoBanEnabled=botEnabled,hackerAutoBanEnabled=hackerEnabled,')
+        s=replace(s,'(x.Value.BotRule&&!botEnabled)||(x.Value.DigitRule?!digitsReady:(x.Value.Handle==0&&!otherAuto))','(x.Value.BotRule&&!botEnabled)||(x.Value.HackerRule&&!hackerEnabled)||(x.Value.DigitRule?!digitsReady:(!x.Value.BotRule&&!x.Value.HackerRule&&x.Value.Handle==0&&!otherAuto))')
+        q.write_text(s)
+        p=root/'BauStyleAntiCheat.cs';s=p.read_text()
+        s=replace(s,'HostModerationQueue.EnqueueBotAction(player,true)','HostModerationQueue.EnqueueHackerAction(player,true)')
+        s=replace(s,'!_autoBanConfirmed||!HostModerationQueue.BotAutoBanEnabled()||!GameBridge.IsHost()','!HostModerationQueue.HackerAutoBanEnabled()||!GameBridge.IsHost()')
+        p.write_text(s)
+        p=root/'RecentPlayerHistory.cs';s=p.read_text()
+        s=replace(s,'    private static bool Loaded;','    private static bool Loaded;\n    private static DateTimeOffset NextCapture;')
+        s=replace(s,'    internal static void Observe(int room,IEnumerable<PlayerIdentity> players){','''    internal static void CaptureTick(){
+                var now=DateTimeOffset.UtcNow;
+                if(now<NextCapture)return;NextCapture=now.AddMilliseconds(500);
+                try{
+                    int room=GameBridge.SessionRoom;
+                    if(room==0||room==-1||!GameBridge.IsPregameLobby())return;
+                    var players=GameBridge.ReadVotingRoster();
+                    if(players.Length>0)Observe(room,players);
+                }catch(Exception ex){Status("capture-error",ex.GetType().Name);}
+            }
+            internal static void CaptureJoin(object? data){
+                try{
+                    if(data==null)return;int room=GameBridge.SessionRoom;
+                    if(room==0||room==-1||!GameBridge.IsPregameLobby())return;
+                    var joined=GameBridge.Read(data);
+                    var roster=GameBridge.ReadVotingRoster().Where(x=>x.ClientId!=joined.ClientId).ToList();
+                    if(joined.ClientId>=0&&!joined.IsLocal&&!string.IsNullOrWhiteSpace(joined.FriendCode))roster.Add(joined);
+                    if(roster.Count>0)Observe(room,roster);
+                }catch(Exception ex){Status("join-error",ex.GetType().Name);}
+            }
+            private static void Status(string state,string detail){
+                try{File.WriteAllText(Path.Combine(Paths.ConfigPath,"LobbyGuardian-player-history-status.json"),JsonSerializer.Serialize(new{state,detail,atUtc=DateTimeOffset.UtcNow.ToString("O"),records=History.Count,withCode=History.Count(x=>!string.IsNullOrWhiteSpace(x.friendCode))}));}catch{}
+            }
+            internal static void Observe(int room,IEnumerable<PlayerIdentity> players){''')
+        s=replace(s,'            File.WriteAllText(temp,JsonSerializer.Serialize(History));','            Directory.CreateDirectory(Paths.ConfigPath);\n            File.WriteAllText(temp,JsonSerializer.Serialize(History));')
+        s=replace(s,'            File.Move(temp,file,true);\n        }}catch{}','            File.Move(temp,file,true);\n            Status("saved","Recent players saved");\n        }}catch(Exception ex){Status("write-error",ex.GetType().Name);}')
+        p.write_text(s)
+        p=root/'LobbyGuardianPlugin.cs';s=p.read_text()
+        pattern=r'(\b(?:private|internal|public)\s+static\s+void\s+ClientUpdatePostfix\s*\([^)]*\)\s*\{)'
+        s,n=re.subn(pattern,r'\1\n        RecentPlayerHistory.CaptureTick();',s,count=1)
+        assert n==1,'Client update hook not found'
+        pattern=r'(\b(?:private|internal|public)\s+static\s+void\s+BotJoinedPostfix\s*\(\s*object\s+__0\s*\)\s*\{)'
+        s,n=re.subn(pattern,r'\1 RecentPlayerHistory.CaptureJoin(__0); ',s,count=1)
+        if n==0:
+            pattern=r'\bprivate\s+static\s+void\s+BotJoinedPostfix\s*\(\s*object\s+__0\s*\)\s*=>\s*ConnectionBotGuard\.Joined\(__0\);'
+            s,n=re.subn(pattern,'private static void BotJoinedPostfix(object __0) { RecentPlayerHistory.CaptureJoin(__0); ConnectionBotGuard.Joined(__0); }',s,count=1)
+        assert n==1,'Join recording hook not found'
+        p.write_text(s)
+        p=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java');s=p.read_text()
+        a=s.index('    private static void collapseLegacyRpcControls(')
+        b=s.index('    public static void addHostResilience(',a)
+        s=s[:a]+'''    private static void protectionToggle(Activity a,LinearLayout p,String name,String key){
+                Button b=new Button(a);b.setAllCaps(false);b.setTextColor(FG);b.setTextSize(14);
+                b.setTag("guardian-clean-protection");
+                Runnable refresh=()->b.setText((enabled(a,UTILITY,key,false)?"Turn off auto-ban ":"Turn on auto-ban ")+name);
+                refresh.run();p.addView(b,new LinearLayout.LayoutParams(-1,-2));
+                b.setOnClickListener(v->{set(a,UTILITY,key,!enabled(a,UTILITY,key,false));refresh.run();});
+            }
+            private static void collapseLegacyRpcControls(android.view.ViewGroup root){
+                for(int i=0;i<root.getChildCount();i++){
+                    View child=root.getChildAt(i);
+                    if(child instanceof TextView && !"guardian-clean-protection".equals(child.getTag())){
+                        String t=((TextView)child).getText().toString().trim().toLowerCase(java.util.Locale.ROOT);
+                        boolean keep=t.equals("rpc protection & diagnostics")||t.equals("copy numbered friend code history")||t.equals("copy recent player history");
+                        boolean legacy=t.contains("rpc")||((t.contains("auto-ban")||t.contains("auto ban")||t.contains("autoban"))&&(t.contains("bot")||t.contains("hack")||t.contains("flood")||t.contains("cheat")))||t.contains("experimental automatic moderation")||t.contains("bot & rpc")||t.contains("bot protection diagnostics");
+                        if(!keep&&legacy){
+                            child.setVisibility(View.GONE);
+                            if(child instanceof CheckBox&&i+1<root.getChildCount()){
+                                View note=root.getChildAt(i+1);
+                                if(note.getClass()==TextView.class)note.setVisibility(View.GONE);
+                            }
+                        }
+                    }
+                    if(child instanceof android.view.ViewGroup)collapseLegacyRpcControls((android.view.ViewGroup)child);
+                }
+            }
+            private static void cleanProtectionPage(LinearLayout p){
+                android.view.ViewParent parent=p.getParent();
+                android.view.ViewGroup page=parent instanceof android.view.ViewGroup?(android.view.ViewGroup)parent:p;
+                collapseLegacyRpcControls(page);
+            }
+        '''+s[b:]
+        a=s.index('        check(a,p,"Auto-ban suspected bots"')
+        b=s.index('        button(a,p,"Review / remove unknown players"',a)
+        s=s[:a]+'''        protectionToggle(a,p,"bots","AutoBanSuspectedBots");
+                protectionToggle(a,p,"hackers","AutoBanHackers");
+        '''+s[b:]
+        s=replace(s,'p.post(()->collapseLegacyRpcControls(p));','p.post(()->cleanProtectionPage(p));\n        p.postDelayed(()->cleanProtectionPage(p),500);')
+        s=replace(s,'b.append("\\nAutomatic moderation: ").append(enabled(a,UTILITY,"ExperimentalAutomaticModeration",false)?"Experimental ON":"OFF — stability isolation");','b.append("\\nHacker auto-ban: ").append(enabled(a,UTILITY,"AutoBanHackers",false)?"ON":"OFF");')
+        s=replace(s,'String code=e.optString("friendCode","").trim();','String code=e.optString("friendCode",e.optString("FriendCode","")).trim();')
+        s=replace(s,'for(String key:new String[]{"name","friendCode","puid","platform","lastSeenUtc"})item.put(key,e.optString(key,""));','for(String key:new String[]{"name","friendCode","platform","lastSeenUtc"})item.put(key,e.optString(key,""));\n                item.put("friendCode",code);')
+        s=replace(s,'if(count==0){alert(a,"Recent player history",','if(count==0){JSONObject hs=json(path(a,"LobbyGuardian-player-history-status.json"));alert(a,"Recent player history",')
+        s=replace(s,'+"\\nTry again after joining a lobby. No clipboard changes made.");return;}','+"\\nRecorder: "+hs.optString("state","No capture recorded yet")+" — "+hs.optString("detail","")+"\\nNo clipboard changes made.");return;}')
+        p.write_text(s)
+        assert s.count('protectionToggle(a,p,"bots"')==1
+        assert s.count('protectionToggle(a,p,"hackers"')==1
+        assert s.count('button(a,p,"RPC protection & diagnostics"')==1
+        print('Independent host protection buttons and live history capture installed')
+        PY_4363
+    - name: Build v4.3.63 Android APK
+      shell: bash
+      run: |-
+        python3 - <<'PY_BUILD'
+        from pathlib import Path
+        import subprocess,tempfile,yaml
+        old=yaml.safe_load(Path('.github/workflows/lobbyguardian-v4362-bot-observation-toggle.yml').read_text())
+        step=next(x for x in old['jobs']['android']['steps'] if x.get('name')=='Build v4.3.62 Android APK')
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False) as f:
+            f.write(step['run']); filename=f.name
+        try: subprocess.run(['bash','-eo','pipefail',filename],check=True)
+        finally: Path(filename).unlink(missing_ok=True)
+        PY_BUILD
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.63-Android-CleanProtections
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload sources
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.63-Sources-Diagnostics
+        path: |
+          LobbyGuardian/Plugin/*.cs
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+        if-no-files-found: error
