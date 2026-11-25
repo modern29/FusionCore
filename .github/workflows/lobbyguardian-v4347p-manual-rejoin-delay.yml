@@ -1,0 +1,445 @@
+name: LobbyGuardian v4.3.47p - standalone rejoin delay
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4347p-manual-rejoin-delay.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout original repo
+      uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Recreate original v4.3.47 source stages
+      shell: bash
+      run: "python3 - <<'PY_BASE'\nfrom pathlib import Path\nimport subprocess, tempfile,\
+        \ yaml\nold=Path('.github/workflows/lobbyguardian-v4347-report-review.yml')\n\
+        steps=yaml.safe_load(old.read_text())['jobs']['android']['steps']\nfor step\
+        \ in steps:\n    name=step.get('name','')\n    if name=='Build v4.3.47 Android\
+        \ APK': break\n    if not step.get('run') or name=='Install PyYAML': continue\n\
+        \    print('>>> '+name,flush=True)\n    with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False)\
+        \ as f:\n        f.write(step['run']); script=f.name\n    try: subprocess.run(['bash','-eo','pipefail',script],check=True)\n\
+        \    finally: Path(script).unlink(missing_ok=True)\nelse: raise RuntimeError('Missing\
+        \ original v4.3.47 build anchor')\nPY_BASE"
+    - name: Apply only whitelist auto-kick and one-click Lobbies rejoin
+      shell: bash
+      run: "python3 - <<'PY_SELECTIVE'\nfrom pathlib import Path\nimport hashlib,base64,zlib,subprocess\n\
+        sha=lambda b:hashlib.sha256(b).hexdigest()\noriginal={'LobbyGuardian/Plugin/ChatModerators.cs':\
+        \ '20b9814717a4dcd16d52976e99facddada2ed9f0b038dca007f2174ce02f43e7', 'LobbyGuardian/Plugin/LocalEffects.cs':\
+        \ '8cb0392f6bbcbc6685ead8ac67bf5aab19e782ab566e0ae51d08b0c4a4b0bd82', 'LobbyGuardian/Plugin/LocalPenalty.cs':\
+        \ '511126a5e7f30742b09ef86372fcd467a0901a0c0b26162f197f214cf692c792', 'LobbyGuardian/Plugin/PlayerLookCopy.cs':\
+        \ '3b53bbb695ebf3f70a6ac29daa9d592b94743e5953c65e419d760f23fa854759', 'LobbyGuardian/Plugin/ModerationRules.cs':\
+        \ 'fdfd64b94088ac7557e021a41c04ddaf70ee74331e115655d37b20120289fcb7', 'LobbyGuardian/Plugin/RapidRaidProtection.cs':\
+        \ '22880cad6d095b34f65099c07a6c9a31af592f022bce04175d0e563c9ee976cb', 'LobbyGuardian/Plugin/WhisperRelay.cs':\
+        \ '1f8d6cb8161173886257fee6b7e6f8d1b98fa7855b1b3963ed938fa5a3d4847e', 'LobbyGuardian/Plugin/InboundTrafficShield.cs':\
+        \ 'e0796ea643c39b398d268c0a8a4374664644a1bad977cfd6173378fe93a5caec', 'LobbyGuardian/Plugin/FeatureHubAdvanced.cs':\
+        \ 'c0196705354df185b7fb6af9253a0065b1050e858d502d81e943231e596b05de', 'LobbyGuardian/Plugin/LobbyAppearance.cs':\
+        \ 'bcd2e21bc23a1b2898cf85f578f83f40f2b68f3570c87e9e911a1164565d155a', 'LobbyGuardian/Plugin/LobbyRaidGuard.cs':\
+        \ '779b0ffb4d215cf73f24f4ccbe040a0f967c4806e35e8b70a137c1315dd04db1', 'LobbyGuardian/Plugin/ConnectionBotGuard.cs':\
+        \ 'e98ac2b96fd049aa8faa878701466c3f3c3fa06a308e5e03195965ec13c006f8', 'LobbyGuardian/Plugin/BanRequestThrottle.cs':\
+        \ '36bcaa94444327b96db4432398cbddf1beb309e3a79271bea9244f360e604e5b', 'LobbyGuardian/Plugin/RpcAutoBanGuard.cs':\
+        \ '657dfdc4c0df030fd54ae4f2fa84d5ec4d9c82cebc1f62e25b4108fe2ee76276', 'LobbyGuardian/Plugin/GameBridge.cs':\
+        \ 'ce673ebe76492a6c2fc9f97cb914da873a7b47bd7f2201426de7b024e13f88c0', 'LobbyGuardian/Plugin/HostNetClones.cs':\
+        \ '875e7da10b85af1b5725efee901afdb08684e86838b129ea5bfaecc6e0b0626d', 'LobbyGuardian/Plugin/LobbyAutoRefresh.cs':\
+        \ '9a990fcfc4a95ca928cce121ba8c4b7efb8feb3c8e39779070916705431cac75', 'LobbyGuardian/Plugin/RecentPlayerHistory.cs':\
+        \ '0d91280b81776f3273f13bd1de378b6c41831aa49d1f74672256a0e66f05c427', 'LobbyGuardian/Plugin/ExtraFeatures.cs':\
+        \ '746bbb15e85eb2bf5bada741b07586a06360398aa300ae1fbadd953b01f2a284', 'LobbyGuardian/Plugin/CosmeticsPlus.cs':\
+        \ 'b50585da9b49b791c95c8e08a9f663b54389d30e85e5e9beead6e73356722362', 'LobbyGuardian/Plugin/VoteAudit.cs':\
+        \ '1409cc50f0fb0e5609ce47fbe402e76cfab0ac0bdbc68ccca0a1c73900ba0303', 'LobbyGuardian/Plugin/ClientFeatures.cs':\
+        \ '31d70980a901b636d85e6d2ba1abeae4f32c7a7045d974fa542ac9bb5713cc70', 'LobbyGuardian/Plugin/PettingHand.cs':\
+        \ '6a1ec19d10f9b32fa5ff4e81bcde05fcd63e7e0a795a590b903a31416dd4902a', 'LobbyGuardian/Plugin/FeatureHubRuntime.cs':\
+        \ '9bf44f98130666cda6ed6f67ee6b99d634b53532ba33a8da2ea2657865c30829', 'LobbyGuardian/Plugin/ProtectionLog.cs':\
+        \ '105c1261367c266d28b4dd6b0afb596b44ddfc07d224312b0a5aede4f4ab82c7', 'LobbyGuardian/Plugin/VoteAlerts.cs':\
+        \ 'a684404aeb79cdb6226771699c42281f34b35d133d9a6741769fcecabe4493ce', 'LobbyGuardian/Plugin/RuleStore.cs':\
+        \ 'c5fec05f4e3c60d55f4b15944b428d4ee326159bbb5a1c977170f55a8e33bffb', 'LobbyGuardian/Plugin/LobbyPresenceAlerts.cs':\
+        \ '0517fb95e766fcc167df0775fa5587e02e76879a7bff7ed19922f13a73939def', 'LobbyGuardian/Plugin/AccountStatus.cs':\
+        \ 'bb0aaa3888f920cce188ef9a3cf68ac817e2ca9303e8a1d7dab147797c512787', 'LobbyGuardian/Plugin/BauStyleAntiCheat.cs':\
+        \ 'a6b40c03e4da73f9056440bc8aef9c40aaaf8d88e7df47ea419fc9f8af5499eb', 'LobbyGuardian/Plugin/ScheduledHostActions.cs':\
+        \ '8b1abb5f03640ac8359e1677bb5f9ba163f790cd7a98dfad0bc26da58fa8d1d8', 'LobbyGuardian/Plugin/HostLobbyClose.cs':\
+        \ '1ea32ba954a333fda15601236fc4941eb29c01781a5ec46ccd04662f76127add', 'LobbyGuardian/Plugin/LobbyNameBadges.cs':\
+        \ '01d0db1b772b03d93eefed80f387f99ba7271495b251b88fd13be3ffbbbbbad1', 'LobbyGuardian/Plugin/ChatRoleLabels.cs':\
+        \ 'ff6d804623a03256489ece76d3ed906a0f95fe2425a0bc90fb867e7b192a737d', 'LobbyGuardian/Plugin/FeatureHubNocturnePort.cs':\
+        \ '2a92aecc1165eb88b4b531ce438b6ff316d41c28f67b0e27019986c497fd36de', 'LobbyGuardian/Plugin/RpcThreatMonitor.cs':\
+        \ '78577c87506ebac6e7ad78d030ec1518a2ccc352169867e4f723ccb25044dbbe', 'LobbyGuardian/Plugin/TempbanHost.cs':\
+        \ '6cd4cd2b447884cbdc7a7449f3b9ce82a141c19d4af37626e486aef194d51daa', 'LobbyGuardian/Plugin/UtilityEnhancements.cs':\
+        \ 'f082e2133fe726ad22c62c77e2c9b9f9417ac6f2ce697953bc3ef7dea025ae2b', 'LobbyGuardian/Plugin/PublicLobbyDirectory.cs':\
+        \ '1ac472aab70d6a711f9bdc13d2b99c3980abe13e29d0dee90b29ad7beaca1ee9', 'LobbyGuardian/Plugin/LobbyChatCommands.cs':\
+        \ '0c2e28f70409a4c6e7ca52152b1f74b95e752d0e1cdb42e682303089fe7e914f', 'LobbyGuardian/Plugin/NetworkControls.cs':\
+        \ 'b36efe6a30be82fa24d4ba819684816486c484b88e201f462ce1820fb2d3497c', 'LobbyGuardian/Plugin/BotShield.cs':\
+        \ '4c54186a329ddecd2742093b66dba1de6fc14bb5fd7e0402e0b35fcb96560ec9', 'LobbyGuardian/Plugin/AuthApiProbe.cs':\
+        \ '6fd98f2ca97e674ad392261b06549be1fbd61ece74e4c8965949c3e9f6dd0f08', 'LobbyGuardian/Plugin/ClientSpatialTelemetry.cs':\
+        \ '01603b722357b2929b39d235a17a263891cbbf890a268bc5d2948b59ca7c46f0', 'LobbyGuardian/Plugin/HostExtras.cs':\
+        \ '86e2478f5fe790ba2aaa903bacfcf15293084a470c4832445e19ed81d54f81bc', 'LobbyGuardian/Plugin/SessionExtras.cs':\
+        \ '1c48bfae4cbff0cbeccbee0e064c9c228ebe64a8ac38a229546079d7cea52da9', 'LobbyGuardian/Plugin/GoogleMergeLogin.cs':\
+        \ '52f7e7e74e7e8a8559def349689a2e90878e70c80ca29751c4ca0f510bf5e8e9', 'LobbyGuardian/Plugin/RuntimeStatus.cs':\
+        \ '88ddc0406aeef8fb281ea031bdfe4a2842ab1748c3fe217c29e8f7d0f0b57c23', 'LobbyGuardian/Plugin/LobbyGuardianPlugin.cs':\
+        \ '100a901c8c3629f5834042afe4edbf1eac818a0d87d8e2a75a0434a05449039f', 'LobbyGuardian/Plugin/HostResilienceShield.cs':\
+        \ '1582c631d10dc3bb568d454821be51f00c437ca57045a93c451a2b3a40578f7c', 'LobbyGuardian/Plugin/HostEndGame.cs':\
+        \ '5457ac699fc822e17f6753d440bf5c901485b0a54392bbb908548563a93c6f09', 'LobbyGuardian/Plugin/UtilityFull.cs':\
+        \ '2fad44b06b79fbeaf6a46c451c8ba3292e3c2a0a392acbcaf62bb310800e66bd'}\nfor\
+        \ path,digest in original.items():\n    assert sha(Path(path).read_bytes())==digest,\
+        \ \"Original source mismatch: \"+path\np=Path('LobbyGuardian/Plugin/ModerationRules.cs')\n\
+        p.write_bytes(zlib.decompress(base64.b64decode('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')))\n\
+        assert sha(p.read_bytes())=='cf9840a6acc15b8144a811eedf35f59d3541d210b001a41bf8964724c4c41c45'\n\
+        p=Path('LobbyGuardian/Plugin/LobbyGuardianPlugin.cs')\np.write_bytes(zlib.decompress(base64.b64decode('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')))\n\
+        assert sha(p.read_bytes())=='20dde049ddd595e7e1d542e21320adb426310628fa8e42b17acc56664185381a'\n\
+        p=Path('LobbyGuardian/Plugin/GameBridge.cs')\np.write_bytes(zlib.decompress(base64.b64decode('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')))\n\
+        assert sha(p.read_bytes())=='ee746794273921a10b423ff0f0c21d11765ae1f85a7476b828f862e7da4302fa'\n\
+        ui=Path(\"fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\"\
+        )\nsubprocess.run([\"patch\",\"--batch\",\"--fuzz=0\",\"-p0\"],input='---\
+        \ fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        n+++ fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        n@@ -1024,10 +1024,10 @@\\n             .setPositiveButton(\"Disable automation\"\
+        ,(dialog,which)-> {\\n                 try {\\n                     JSONObject\
+        \ r=readRules();\\n-                    r.put(\"AutoBanEnabled\",false);r.put(\"\
+        BanEveryone\",false);r.put(\"AutoKickEnabled\",false);\\n+               \
+        \     r.put(\"AutoBanEnabled\",false);r.put(\"BanEveryone\",false);r.put(\"\
+        AutoKickEnabled\",false);r.put(\"KickEveryoneExceptWhitelist\",false);\\n\
+        \                     writeClientFile(RULES,r);\\n                     JSONObject\
+        \ c=new JSONObject(read(config(\"LobbyGuardian-client-settings.json\"),12000));\\\
+        n                     for(String key:new String[]{\"AutoRejoinNetworkDrops\"\
+        ,\"AutoRejoinAfterKickOnce\",\"VoteRejoinThree\",\\n                     \
+        \    \"PrivateChatHostRelay\",\"LocalBanPointsReset\",\"LocalLobbyNoClip\"\
+        ,\"LocalLobbyInvisible\"})\\n                         c.put(key,false);\\\
+        n                     writeClientFile(\"LobbyGuardian-client-settings.json\"\
+        ,c);\\n@@ -1155,7 +1155,7 @@\\n             logo.setGravity(Gravity.CENTER_VERTICAL);\\\
+        n             top.addView(logo,new LinearLayout.LayoutParams(0,dp(activity,39),1));\\\
+        n             TextView version = new TextView(activity);\\n-            version.setText(\"\
+        v4.2.8 • DRAG\");\\n+            version.setText(\"v4.3.47o • DRAG\");\\n\
+        \             version.setTextColor(MUTED);\\n             version.setTextSize(10);\\\
+        n             top.addView(version);\\n@@ -1315,11 +1315,7 @@\\n          \
+        \           if(!r.optBoolean(\"lobby\",false)){\\n                       \
+        \  Toast.makeText(activity,\"Join a pregame lobby first\",Toast.LENGTH_SHORT).show();return;\\\
+        n                     }\\n-                    new AlertDialog.Builder(activity).setTitle(\"\
+        Leave and return?\")\\n-                        .setMessage(\"Leave normally\
+        \ and rejoin this room once using the game matchmaking flow. Room must still\
+        \ accept entries.\")\\n-                        .setNegativeButton(\"Cancel\"\
+        ,null)\\n-                        .setPositiveButton(\"Rejoin now\",(d,w)->queueCurrentRoomRejoin(activity))\\\
+        n-                        .show();\\n+                    queueCurrentRoomRejoin(activity);\\\
+        n                 }catch(Exception e){Toast.makeText(activity,\"Could not\
+        \ read room\",Toast.LENGTH_SHORT).show();}\\n             });\\n         \
+        \    section(activity, overview,\"Dashboard\",\"Live status from the managed\
+        \ plugin\");\\n@@ -1599,12 +1598,13 @@\\n             actionButton(activity,host,\"\
+        CHOOSE PLAYER • HOST ACTIONS\",v->showPlayerInspector(activity));\\n     \
+        \        CheckBox enabled=check(activity,host,rules,\"AutoBanEnabled\",\"\
+        Enable automatic host bans\",false);\\n             CheckBox all=check(activity,host,rules,\"\
+        BanEveryone\",\"Ban everyone except whitelist\",false);\\n+            CheckBox\
+        \ kickAll=check(activity,host,rules,\"KickEveryoneExceptWhitelist\",\"Auto-kick\
+        \ everyone except whitelist\",false);\\n             CheckBox stable=check(activity,host,rules,\"\
+        BanEveryoneRequiresStableId\",\"Require stable ID for ban-everyone\",true);\\\
+        n             CheckBox flag=check(activity,host,rules,\"FlagVoteKickAttempts\"\
+        ,\"Flag observed vote-kick attempts\",true);\\n             CheckBox autoKick=check(activity,host,rules,\"\
+        AutoKickEnabled\",\"Enable automatic kick list\",false);\\n-            for(CheckBox\
+        \ autoRule:new CheckBox[]{enabled,all,stable,flag,autoKick}){\\n+        \
+        \    for(CheckBox autoRule:new CheckBox[]{enabled,all,kickAll,stable,flag,autoKick}){\\\
+        n                 final String ruleKey=autoRule==enabled?\"AutoBanEnabled\"\
+        :autoRule==all?\"BanEveryone\":\\n-                    autoRule==stable?\"\
+        BanEveryoneRequiresStableId\":autoRule==flag?\"FlagVoteKickAttempts\":\"AutoKickEnabled\"\
+        ;\\n+                    autoRule==kickAll?\"KickEveryoneExceptWhitelist\"\
+        :autoRule==stable?\"BanEveryoneRequiresStableId\":autoRule==flag?\"FlagVoteKickAttempts\"\
+        :\"AutoKickEnabled\";\\n                 autoRule.setOnCheckedChangeListener((button,isChecked)->{\\\
+        n                     try{rules.put(ruleKey,isChecked);writeClientFile(RULES,rules);}\\\
+        n                     catch(Exception e){Toast.makeText(activity,\"Could not\
+        \ save moderation setting\",Toast.LENGTH_SHORT).show();}\\n',text=True,check=True)\n\
+        def once(s,a,b):\n    assert s.count(a)==1,(a[:120],s.count(a))\n    return\
+        \ s.replace(a,b,1)\ns=ui.read_text()\ns=once(s,'            for(CheckBox autoRule:new\
+        \ CheckBox[]{enabled,all,kickAll,stable,flag,autoKick}){','            text(activity,host,\"\
+        Bulk kick does not require the auto-ban master. Turning on either bulk mode\
+        \ turns off the other; individual ban and kick lists are unchanged.\");\\\
+        n            final boolean[] changingBulk={false};\\n            for(CheckBox\
+        \ bulk:new CheckBox[]{all,kickAll}){\\n                final String key=bulk==all?\"\
+        BanEveryone\":\"KickEveryoneExceptWhitelist\";\\n                final String\
+        \ otherKey=bulk==all?\"KickEveryoneExceptWhitelist\":\"BanEveryone\";\\n \
+        \               final CheckBox other=bulk==all?kickAll:all;\\n           \
+        \     bulk.setOnCheckedChangeListener((button,isChecked)->{\\n           \
+        \         if(changingBulk[0])return;\\n                    changingBulk[0]=true;\\\
+        n                    try{\\n                        rules.put(key,isChecked);\\\
+        n                        if(isChecked)rules.put(otherKey,false);\\n      \
+        \                  writeClientFile(RULES,rules);\\n                      \
+        \  JSONObject saved=readRules();\\n                        if(!saved.has(key)||saved.optBoolean(key)!=isChecked)throw\
+        \ new IllegalStateException(\"Rule was not saved\");\\n                  \
+        \      if(isChecked)other.setChecked(false);\\n                        Toast.makeText(activity,(bulk==all?\"\
+        Bulk ban\":\"Bulk kick\")+(isChecked?\" ON\":\" OFF\"),Toast.LENGTH_SHORT).show();\\\
+        n                    }catch(Exception e){\\n                        JSONObject\
+        \ saved=readRules();\\n                        bulk.setChecked(saved.optBoolean(key,false));other.setChecked(saved.optBoolean(otherKey,false));\\\
+        n                        try{rules.put(key,bulk.isChecked());rules.put(otherKey,other.isChecked());}catch(Exception\
+        \ ignored){}\\n                        Toast.makeText(activity,\"Could not\
+        \ save bulk moderation setting\",Toast.LENGTH_LONG).show();\\n           \
+        \         }finally{changingBulk[0]=false;}\\n                });\\n      \
+        \      }\\n            for(CheckBox autoRule:new CheckBox[]{enabled,stable,flag,autoKick}){')\n\
+        s=once(s,'                final String ruleKey=autoRule==enabled?\"AutoBanEnabled\"\
+        :autoRule==all?\"BanEveryone\":\\n                    autoRule==kickAll?\"\
+        KickEveryoneExceptWhitelist\":autoRule==stable?\"BanEveryoneRequiresStableId\"\
+        :autoRule==flag?\"FlagVoteKickAttempts\":\"AutoKickEnabled\";','         \
+        \       final String ruleKey=autoRule==enabled?\"AutoBanEnabled\":autoRule==stable?\"\
+        BanEveryoneRequiresStableId\":autoRule==flag?\"FlagVoteKickAttempts\":\"AutoKickEnabled\"\
+        ;')\nassert s.count('\"LEAVE + REJOIN CURRENT ROOM\"')==1\nassert \"Leave\
+        \ and return?\" not in s\nassert \"VoteRejoinFour\" not in s and \"RaidTargetVoteRepeat\"\
+        \ not in s\nui.write_text(s)\nchanged=['LobbyGuardian/Plugin/ModerationRules.cs',\
+        \ 'LobbyGuardian/Plugin/LobbyGuardianPlugin.cs', 'LobbyGuardian/Plugin/GameBridge.cs']\n\
+        for path,digest in original.items():\n    if path not in changed:\n      \
+        \  assert sha(Path(path).read_bytes())==digest, \"Unexpected original code\
+        \ change: \"+path\nprint(\"Only three host-related C# files changed; all other\
+        \ archived C# hashes match.\")\nPY_SELECTIVE\n"
+    - name: Add standalone manual rejoin delay only
+      shell: bash
+      run: "python3 - <<'PY_MANUAL'\nfrom pathlib import Path\nimport hashlib\np=Path('LobbyGuardian/Plugin/ClientFeatures.cs')\n\
+        j=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java')\n\
+        original=p.read_text(); oldjava=j.read_text()\nassert hashlib.sha256(p.read_bytes()).hexdigest()=='31d70980a901b636d85e6d2ba1abeae4f32c7a7045d974fa542ac9bb5713cc70'\n\
+        assert 'v4.3.47o' in oldjava\n\ndef once(s,a,b):\n    assert s.count(a)==1,(a[:100],s.count(a))\n\
+        \    return s.replace(a,b,1)\ns=original\ns=once(s,'    private static bool\
+        \ _manualRejoinPending;','''    private static bool _manualRejoinPending;\n\
+        \    private static int _manualDelaySeconds = 15;\n    private static bool\
+        \ _manualDelayStarted;\n    private static void ManualDelayStatus(string state,\
+        \ long deadline = 0)\n    {\n        try { File.WriteAllText(PathTo(\"LobbyGuardian-manual-delay.json\"\
+        ), JsonSerializer.Serialize(new {\n            state, deadlineUtcMs=deadline,\
+        \ updatedUtcMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()\n        }));\
+        \ } catch { }\n    }''')\ns=once(s,'        _manualRejoinPending = false;\\\
+        n        _lastCode = FormatCode(id);','''        if (_manualRejoinPending\
+        \ || _rejoinOrigin == \"current-room-button\") ManualDelayStatus(\"Joined\
+        \ or request cleared\");\n        _manualRejoinPending = false;\n        _manualDelayStarted\
+        \ = false;\n        _lastCode = FormatCode(id);''')\ns=once(s,'        if\
+        \ (_manualRejoinPending) _manualRejoinAt = DateTimeOffset.UtcNow;','''   \
+        \     if (_manualRejoinPending && _rejoinOrigin == \"current-room-button\"\
+        )\n        {\n            if (!reason.Equals(\"ExitGame\", StringComparison.OrdinalIgnoreCase))\n\
+        \            {\n                _manualRejoinPending = false;\n          \
+        \      _manualDelayStarted = false;\n                ManualDelayStatus(\"\
+        Stopped: \" + reason);\n            }\n        }\n        else if (_manualRejoinPending)\
+        \ _manualRejoinAt = DateTimeOffset.UtcNow;\n        if (_rejoinOrigin == \"\
+        current-room-button\" && reason.Contains(\"TooManyRequests\", StringComparison.OrdinalIgnoreCase))\n\
+        \        {\n            _manualRejoinPending = false;\n            _retryPending\
+        \ = false;\n            ManualDelayStatus(\"Server rate limit: retry manually\
+        \ later\");\n        }''')\ns=once(s,'''            currentRoomRequest=command.RootElement.TryGetProperty(\"\
+        type\",out var kind)\n                && kind.GetString()==\"rejoin-current\"\
+        ;''','''            currentRoomRequest=command.RootElement.TryGetProperty(\"\
+        type\",out var kind)\n                && kind.GetString()==\"rejoin-current\"\
+        ;\n            if (kind.ValueKind == JsonValueKind.String && kind.GetString()==\"\
+        cancel-manual-rejoin\")\n            {\n                if (_manualRejoinPending\
+        \ && _rejoinOrigin==\"current-room-button\")\n                {\n        \
+        \            _manualRejoinPending=false;\n                    _manualDelayStarted=false;\n\
+        \                    ManualDelayStatus(\"Cancelled\");\n                 \
+        \   Status(\"rejoin-cancelled\", \"Manual reconnect cancelled\");\n      \
+        \          }\n                return;\n            }''')\ns=once(s,'''   \
+        \     if (IsJoined() && !currentRoomRequest)''','''        if (currentRoomRequest\
+        \ && !IsJoined())\n        { ManualDelayStatus(\"Join a lobby first\"); return;\
+        \ }\n        if (IsJoined() && !currentRoomRequest)''')\ns=once(s,'''    \
+        \        bool leaveThenReturn=type.GetString()==\"rejoin-current\";\n    \
+        \        _lastManualJoinAttempt''','''            bool leaveThenReturn=type.GetString()==\"\
+        rejoin-current\";\n            if (leaveThenReturn)\n            {\n     \
+        \           _manualDelaySeconds=15;\n                if (doc.RootElement.TryGetProperty(\"\
+        delaySeconds\",out var delay) && delay.TryGetInt32(out int seconds))\n   \
+        \                 _manualDelaySeconds=Math.Clamp(seconds,5,30);\n        \
+        \        _manualDelayStarted=false;\n                _retryPending=false;\n\
+        \                ManualDelayStatus(\"Leaving lobby\");\n            }\n  \
+        \          _lastManualJoinAttempt''')\ns=once(s,'            _manualRejoinExpires\
+        \ = DateTimeOffset.UtcNow.AddSeconds(40);','            _manualRejoinExpires\
+        \ = DateTimeOffset.UtcNow.AddSeconds(leaveThenReturn ? 70 : 40);')\ns=once(s,'''\
+        \                    _manualRejoinPending=false;\n                    Status(\"\
+        rejoin-error\",\"Voluntary exit failed: \"+Explain(e));''','''           \
+        \         _manualRejoinPending=false;\n                    ManualDelayStatus(\"\
+        Exit failed\");\n                    Status(\"rejoin-error\",\"Voluntary exit\
+        \ failed: \"+Explain(e));''')\ns=once(s,'''        if (_lastExitRestricted)\
+        \ { _manualRejoinPending=false; Status(\"rejoin-blocked\",\"Server kick/ban\
+        \ rejected the recent room\"); return; }\n        if (IsJoined()) {''','''\
+        \        bool delayedManual = _rejoinOrigin==\"current-room-button\";\n  \
+        \      if (delayedManual && _voteCycle != VoteCycleStage.Idle)\n        {\
+        \ _manualRejoinPending=false; ManualDelayStatus(\"Cancelled: another action\
+        \ active\"); return; }\n        if (_lastExitRestricted) { _manualRejoinPending=false;\
+        \ if(delayedManual) ManualDelayStatus(\"Blocked by server\"); Status(\"rejoin-blocked\"\
+        ,\"Server kick/ban rejected the recent room\"); return; }\n        if (delayedManual\
+        \ && now > _manualRejoinExpires)\n        { _manualRejoinPending=false; ManualDelayStatus(\"\
+        Expired\"); return; }\n        if (IsJoined()) {''')\ns=once(s,'''       \
+        \ _manualRejoinPending=false;\n        TryRejoin();\n    }\n\n    private\
+        \ static void ProcessHostCommand()''','''        if (delayedManual && !_manualDelayStarted)\n\
+        \        {\n            _manualDelayStarted=true;\n            _manualRejoinAt=now.AddSeconds(_manualDelaySeconds);\n\
+        \            ManualDelayStatus(\"Waiting\", _manualRejoinAt.ToUnixTimeMilliseconds());\n\
+        \            RejoinTrace(\"manual-delay-started\", \"Standalone rejoin timer:\
+        \ \" + _manualDelaySeconds + \" seconds\");\n            return;\n       \
+        \ }\n        _manualRejoinPending=false;\n        if (delayedManual) ManualDelayStatus(\"\
+        Request sent once; no automatic retry\");\n        TryRejoin();\n    }\n\n\
+        \    private static void ProcessHostCommand()''')\n# Preserve the complete\
+        \ original voting and shared matchmaking method region.\nassert s[s.index('\
+        \    private static void ProcessVoteCommand()'):]==original[original.index('\
+        \    private static void ProcessVoteCommand()'):]\np.write_text(s)\nu=oldjava\n\
+        u=once(u,'private static void queueCurrentRoomRejoin(Activity activity) {','private\
+        \ static void queueCurrentRoomRejoin(Activity activity,int delaySeconds) {')\n\
+        u=once(u,'''            JSONObject cmd=new JSONObject();cmd.put(\"type\",\"\
+        rejoin-current\");\n            cmd.put(\"createdUtcMs\",System.currentTimeMillis());''','''\
+        \            JSONObject cmd=new JSONObject();cmd.put(\"type\",\"rejoin-current\"\
+        );\n            cmd.put(\"delaySeconds\",delaySeconds);\n            cmd.put(\"\
+        createdUtcMs\",System.currentTimeMillis());''')\nu=once(u,'Toast.makeText(activity,\"\
+        Normal leave/rejoin requested\",Toast.LENGTH_SHORT).show();','Toast.makeText(activity,\"\
+        Standalone rejoin requested: \"+delaySeconds+\" seconds after leaving\",Toast.LENGTH_SHORT).show();')\n\
+        u=once(u,'''            actionButton(activity,lobbies,\"LEAVE + REJOIN CURRENT\
+        \ ROOM\",v->{''','''            text(activity,lobbies,\"Standalone rejoin\
+        \ delay (seconds after leaving)\");\n            final String[] manualDelays={\"\
+        5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"12\",\"15\",\"20\",\"30\"};\n       \
+        \     final android.widget.Spinner manualDelay=new android.widget.Spinner(activity);\n\
+        \            manualDelay.setAdapter(new android.widget.ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,manualDelays));\n\
+        \            manualDelay.setSelection(7);\n            lobbies.addView(manualDelay);\n\
+        \            final TextView manualStatus=text(activity,lobbies,\"Manual rejoin:\
+        \ Ready\");\n            final Runnable manualTicker=new Runnable(){public\
+        \ void run(){\n                if(!manualStatus.isAttachedToWindow())return;\n\
+        \                try{\n                    JSONObject d=new JSONObject(read(config(\"\
+        LobbyGuardian-manual-delay.json\"),4000));\n                    long now=System.currentTimeMillis();\n\
+        \                    String state=d.optString(\"state\",\"Ready\");\n    \
+        \                if(now-d.optLong(\"updatedUtcMs\",0)>80000)state=\"Ready\"\
+        ;\n                    if(state.equals(\"Waiting\"))state=\"Waiting: \"+Math.max(0,(d.optLong(\"\
+        deadlineUtcMs\",now)-now+999)/1000)+\" s\";\n                    manualStatus.setText(\"\
+        Manual rejoin: \"+state);\n                }catch(Exception ignored){manualStatus.setText(\"\
+        Manual rejoin: Ready\");}\n                manualStatus.postDelayed(this,500L);\n\
+        \            }};\n            manualStatus.addOnAttachStateChangeListener(new\
+        \ View.OnAttachStateChangeListener(){\n                public void onViewAttachedToWindow(View\
+        \ v){manualStatus.removeCallbacks(manualTicker);manualStatus.post(manualTicker);}\n\
+        \                public void onViewDetachedFromWindow(View v){manualStatus.removeCallbacks(manualTicker);}\n\
+        \            });\n            if(manualStatus.isAttachedToWindow())manualStatus.post(manualTicker);\n\
+        \            actionButton(activity,lobbies,\"CANCEL PENDING MANUAL REJOIN\"\
+        ,v->{\n                try{JSONObject cmd=new JSONObject();cmd.put(\"type\"\
+        ,\"cancel-manual-rejoin\");cmd.put(\"createdUtcMs\",System.currentTimeMillis());\n\
+        \                    writeClientFile(\"LobbyGuardian-rejoin-command.json\"\
+        ,cmd);\n                }catch(Exception e){Toast.makeText(activity,\"Unable\
+        \ to cancel\",Toast.LENGTH_SHORT).show();}\n            });\n            actionButton(activity,lobbies,\"\
+        LEAVE + REJOIN CURRENT ROOM\",v->{''')\nu=once(u,'                    queueCurrentRoomRejoin(activity);','\
+        \                    queueCurrentRoomRejoin(activity,Integer.parseInt((String)manualDelay.getSelectedItem()));')\n\
+        u=once(u,'v4.3.47o • DRAG','v4.3.47p • DRAG')\nj.write_text(u)\nprint('Standalone\
+        \ delay applied; vote methods and shared TryRejoin source unchanged.')\nPY_MANUAL\n"
+    - name: Compile and test host rule behavior
+      shell: bash
+      run: 'set -e
+
+        T=$(mktemp -d)
+
+        dotnet new console --framework net10.0 --output "$T" --no-restore
+
+        cp LobbyGuardian/Plugin/ModerationRules.cs "$T/ModerationRules.cs"
+
+        cat > "$T/Program.cs" <<''CS''
+
+        using System;
+
+        using LobbyGuardian;
+
+        static void Check(bool ok,string label){if(!ok)throw new Exception(label);Console.WriteLine("PASS
+        "+label);}
+
+        var r=new RuleSettings();
+
+        var p=new PlayerIdentity{ClientId=7,FriendCode="guest#1234",Puid="guest-id",Name="Guest"};
+
+        r.AllowFriendCodes.Add("trusted#0000");
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Allow,"default
+        off");
+
+        r.KickEveryoneExceptWhitelist=true;
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Kick,"new
+        kick rule");
+
+        Check(ModerationRules.OnJoin(r,p,false).Action==ModerationAction.Allow,"host
+        only");
+
+        p.FriendCode="trusted#0000";Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Allow,"whitelist
+        protected");
+
+        p.FriendCode="guest#1234";
+
+        r.AutoBanEnabled=true;r.BanFriendCodes.Add(p.FriendCode);
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Ban,"original
+        explicit ban precedence");
+
+        r.BanFriendCodes.Clear();
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Kick,"bulk
+        kick independent of enabled explicit bans");
+
+        r.BanEveryone=true;
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Ban,"original
+        bulk ban precedence");
+
+        r.BanEveryone=false;r.AutoBanEnabled=false;r.KickEveryoneExceptWhitelist=false;
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Allow,"new
+        switch off");
+
+        r.AutoKickEnabled=true;r.KickFriendCodes.Add(p.FriendCode);
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Kick,"original
+        kick list unchanged");
+
+        CS
+
+        dotnet run --project "$T" --configuration Release
+
+        '
+    - name: Compile final plugin
+      run: dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration
+        Release --no-restore --no-incremental
+    - name: Package compiled plugin
+      shell: bash
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport zipfile,hashlib\nasset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')\n\
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()\n\
+        for marker in (b'WhitelistOnlyKick',b'SweepWhitelistOnly',b'KickEveryoneExceptWhitelist'):\n\
+        \    assert marker in dll,marker\nfor marker in ('LobbyGuardian-whitelist-kick-status.json',):\n\
+        \    assert marker.encode('utf-16le') in dll,marker\nwith zipfile.ZipFile(asset)\
+        \ as old, zipfile.ZipFile(asset.with_suffix('.new.zip'),'w',compression=zipfile.ZIP_DEFLATED)\
+        \ as new:\n    for item in old.infolist():\n        if item.filename.rsplit('/',1)[-1].lower()=='lobbyguardian.plugin.dll':continue\n\
+        \        new.writestr(item,old.read(item))\n    new.writestr('plugins/LobbyGuardian.Plugin.dll',dll)\n\
+        asset.with_suffix('.new.zip').replace(asset)\nprint('Final plugin SHA256:',hashlib.sha256(dll).hexdigest())\n\
+        PY"
+    - name: Build Android APK
+      run: 'chmod +x gradlew
+
+        ./gradlew :fusionApp:assembleDebug --stacktrace'
+    - name: Verify APK contains final runtime and menu
+      shell: bash
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport io,zipfile,hashlib\n\
+        assert hashlib.sha256(Path('LobbyGuardian/Plugin/ClientFeatures.cs').read_bytes()).hexdigest()=='150c83ac485cda232a3d62f5fd75d0a005b314048591295b59a6ec82d0bc7477'\n\
+        assert hashlib.sha256(Path('LobbyGuardian/Plugin/LobbyRaidGuard.cs').read_bytes()).hexdigest()=='779b0ffb4d215cf73f24f4ccbe040a0f967c4806e35e8b70a137c1315dd04db1'\n\
+        expected=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()\n\
+        apks=list(Path('fusionApp/build/outputs/apk/debug').glob('*.apk'))\nassert\
+        \ apks,'APK not built'\nfor apk in apks:\n    with zipfile.ZipFile(apk) as\
+        \ a:\n        with zipfile.ZipFile(io.BytesIO(a.read('assets/BepInEx-arm64.zip')))\
+        \ as z:\n            matches=[n for n in z.namelist() if n.rsplit('/',1)[-1].lower()=='lobbyguardian.plugin.dll']\n\
+        \            assert matches==['plugins/LobbyGuardian.Plugin.dll'],matches\n\
+        \            assert z.read(matches[0])==expected,'Stale DLL in APK'\n    \
+        \    dex=b''.join(a.read(n) for n in a.namelist() if n.endswith('.dex'))\n\
+        \        for marker in (b'KickEveryoneExceptWhitelist',b'Auto-kick everyone\
+        \ except whitelist',b'VoteRejoinThree',b'LEAVE + REJOIN CURRENT ROOM',b'v4.3.47p',b'Standalone\
+        \ rejoin delay',b'CANCEL PENDING MANUAL REJOIN',b'delaySeconds'):\n      \
+        \      assert marker in dex,marker\n        for marker in (b'queueExplicitVoteRounds',b'RaidTargetVoteRepeat',b'VoteRejoinFour',b'Leave\
+        \ and return?'):\n            assert marker not in dex,marker\n        assert\
+        \ b'WhitelistKickStatus' in expected\n        assert b'ManualDelayStatus'\
+        \ in expected\n        assert b'_cycleRoundLimit' not in expected\n    print(apk.name,\
+        \ 'verified packaged DLL:',hashlib.sha256(expected).hexdigest())\nPY"
+    - name: Upload packaging-verified candidate
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.47p-ManualRejoinDelay-Candidate
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload final sources
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.47p-Sources
+        path: 'LobbyGuardian/Plugin/*.cs
+
+          fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java
+
+          LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll'
+        if-no-files-found: error
