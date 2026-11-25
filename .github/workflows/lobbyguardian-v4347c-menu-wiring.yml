@@ -1,0 +1,375 @@
+name: Lobby Guardian v4.3.47c - Original menu and host kick wiring
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4347c-menu-wiring.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout original repo
+      uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Recreate original v4.3.47 source stages
+      shell: bash
+      run: "python3 - <<'PY_BASE'\nfrom pathlib import Path\nimport subprocess, tempfile, yaml\nold=Path('.github/workflows/lobbyguardian-v4347-report-review.yml')\n\
+        steps=yaml.safe_load(old.read_text())['jobs']['android']['steps']\nfor step in steps:\n    name=step.get('name','')\n\
+        \    if name=='Build v4.3.47 Android APK': break\n    if not step.get('run') or name=='Install PyYAML':\
+        \ continue\n    print('>>> '+name,flush=True)\n    with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False)\
+        \ as f:\n        f.write(step['run']); script=f.name\n    try: subprocess.run(['bash','-eo','pipefail',script],check=True)\n\
+        \    finally: Path(script).unlink(missing_ok=True)\nelse: raise RuntimeError('Missing original v4.3.47 build\
+        \ anchor')\nPY_BASE"
+    - name: Verify base and apply two isolated additions
+      shell: bash
+      run: "python3 - <<'PY_PATCH'\nfrom pathlib import Path\nimport hashlib\nexpected={'LobbyGuardian/Plugin/ClientFeatures.cs':\
+        \ '31d70980a901b636d85e6d2ba1abeae4f32c7a7045d974fa542ac9bb5713cc70', 'LobbyGuardian/Plugin/LobbyGuardianPlugin.cs':\
+        \ '100a901c8c3629f5834042afe4edbf1eac818a0d87d8e2a75a0434a05449039f', 'LobbyGuardian/Plugin/ModerationRules.cs':\
+        \ 'fdfd64b94088ac7557e021a41c04ddaf70ee74331e115655d37b20120289fcb7', 'fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java':\
+        \ '116deb8c1429421b7d44e5e7f56e4c214d657ef7d41acf4d5bb0bba20a47601c'}\nfor name,digest in expected.items():\n\
+        \    assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest, \"Base source mismatch: \"+name\n\
+        from pathlib import Path\nroot=Path('LobbyGuardian/Plugin')\nui=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')\n\
+        def once(s,a,b):\n    assert s.count(a)==1,(a[:120],s.count(a))\n    return s.replace(a,b,1)\ndef edit(p,f):\n\
+        \    s=p.read_text(); t=f(s); assert t!=s,p; p.write_text(t)\n# Keep all previous rule code intact. The\
+        \ optional whitelist-only admission mode uses existing identity matching.\ndef rules(s):\n    marker=' \
+        \   public static Decision OnVoteKickObserved('\n    return once(s,marker,'''    // Whitelist-only admission\
+        \ is independent of the existing kick and ban lists.\n    public static Decision WhitelistOnlyKick(RuleSettings\
+        \ rules, PlayerIdentity player, bool localIsHost)\n    {\n        if (!localIsHost || player.IsLocal ||\
+        \ player.IsHost || player.ClientId < 0)\n            return new(ModerationAction.Allow, \"Not an eligible\
+        \ host target\");\n        var fc = Norm(player.FriendCode);\n        var puid = Norm(player.Puid);\n  \
+        \      var name = Norm(player.Name);\n        if (In(rules.AllowFriendCodes, fc) || In(rules.AllowPuids,\
+        \ puid) || In(rules.AllowNamesExact, name))\n            return new(ModerationAction.Allow, \"Whitelist\
+        \ match\");\n        // An incomplete identity must not cause an allowed player to be removed.\n       \
+        \ if ((fc.Length == 0 && puid.Length == 0) ||\n            (fc.Length == 0 && rules.AllowFriendCodes?.Count\
+        \ > 0) ||\n            (puid.Length == 0 && rules.AllowPuids?.Count > 0) ||\n            (name.Length ==\
+        \ 0 && rules.AllowNamesExact?.Count > 0))\n            return new(ModerationAction.Allow, \"Whitelist identity\
+        \ not resolved\");\n        return new(ModerationAction.Kick, \"Not on host whitelist\");\n    }\n\n'''+marker)\n\
+        edit(root/'ModerationRules.cs',rules)\n# Add an isolated, rate-limited host lobby check, never send a ban\
+        \ from this new path.\ndef host(s):\n    s=once(s,'    private bool _firstEventSeen;','    private bool\
+        \ _firstEventSeen;\\n    private DateTimeOffset _nextWhitelistSweep;')\n    s=once(s,'ConnectionBotGuard.Tick();','ConnectionBotGuard.Tick();\
+        \ Current?.SweepWhitelistOnly();')\n    anchor='    private void ProcessIdentity(PlayerIdentity player)'\n\
+        \    s=once(s,anchor,'''    private void SweepWhitelistOnly()\n    {\n        var now = DateTimeOffset.UtcNow;\n\
+        \        if (now < _nextWhitelistSweep) return;\n        _nextWhitelistSweep = now.AddSeconds(1);\n    \
+        \    try\n        {\n            if (!GameBridge.IsHost() || !ClientFeatures.IsLobby() || !ClientFeatures.IsConnectedPregame())\
+        \ return;\n            var option = Path.Combine(Paths.ConfigPath, \"LobbyGuardian-utility-options.json\"\
+        );\n            if (!File.Exists(option)) return;\n            using var data = System.Text.Json.JsonDocument.Parse(File.ReadAllText(option));\n\
+        \            if (!data.RootElement.TryGetProperty(\"KickEveryoneExceptWhitelist\", out var flag) ||\n  \
+        \              flag.ValueKind != System.Text.Json.JsonValueKind.True) return;\n            // Never substitute\
+        \ default empty rules when a whitelist file is unreadable.\n            if (!File.Exists(_rulesPath)) return;\n\
+        \            var rules = System.Text.Json.JsonSerializer.Deserialize<RuleSettings>(File.ReadAllText(_rulesPath),\n\
+        \                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });\n \
+        \           if (rules is null || rules.AllowFriendCodes is null || rules.AllowPuids is null || rules.AllowNamesExact\
+        \ is null) return;\n            foreach (var player in GameBridge.ReadVotingRoster())\n            {\n \
+        \               var decision = ModerationRules.WhitelistOnlyKick(rules, player, true);\n               \
+        \ if (decision.Action != ModerationAction.Kick) continue;\n                if (!_banThrottle.CanSend(player.ClientId,\
+        \ now)) continue;\n                if (!GameBridge.IsHost() || !ClientFeatures.IsConnectedPregame()) return;\n\
+        \                bool sent = GameBridge.Kick(player);\n                HostExtras.ModerationNotice(\"kick\"\
+        , player, decision.Reason, sent);\n                _events?.Write(\"whitelist-only\", sent ? \"kick-requested\"\
+        \ : \"kick-failed\", decision.Reason, player.Name);\n                break; // at most one request per second;\
+        \ do not retry the same client within 30 seconds\n            }\n        }\n        catch { /* Fail closed\
+        \ on unreadable settings or roster. */ }\n    }\n\n'''+anchor)\n    return s\nedit(root/'LobbyGuardianPlugin.cs',host)\n\
+        # Existing vote state machine: configure the total round limit once at sequence start.\ndef client(s):\n\
+        \    s=once(s,'    private static bool IsLobby()','    internal static bool IsConnectedPregame() => string.Equals(Get(GameBridge.Client,\
+        \ \"GameState\")?.ToString(), \"Joined\", StringComparison.OrdinalIgnoreCase) && IsLobby();\\n\\n    internal\
+        \ static bool IsLobby()')\n    s=once(s,'    private static string _cycleIdentity = \"\", _cycleTarget =\
+        \ \"\";','    private static int _cycleRoundLimit = 3;\\n    private static string _cycleIdentity = \"\"\
+        , _cycleTarget = \"\";')\n    s=once(s,'                    _cycleAllTargets = false; _cycleForceThree =\
+        \ false;','                    _cycleAllTargets = false; _cycleForceThree = false;\\n                  \
+        \  _cycleRoundLimit = ReadSetting(\"VoteRejoinFour\") ? 4 : 3;')\n    # Only the individual vote option\
+        \ changes. Keep group/host sequences at their original limit.\n    s=once(s,'        _cycleForceThree=true;','\
+        \        _cycleForceThree=true;\\n        _cycleRoundLimit=3;')\n    s=once(s,'\"Vote 1/3 requested; awaiting\
+        \ lobby/connection state before one normal rejoin\"','\"Vote 1/\" + _cycleRoundLimit + \" requested; awaiting\
+        \ lobby/connection state before one normal rejoin\"')\n    s=once(s,'_cycleJoinRequests >= 2','_cycleJoinRequests\
+        \ >= _cycleRoundLimit - 1')\n    s=once(s,'+ _cycleJoinRequests + \"/2; awaiting server acceptance\"','+\
+        \ _cycleJoinRequests + \"/\" + (_cycleRoundLimit - 1) + \"; awaiting server acceptance\"')\n    # There\
+        \ are two checks; the group path still starts with 3, the individual path can start with 4.\n    assert\
+        \ s.count('if (_cycleVotes >= 3)')==2\n    s=s.replace('if (_cycleVotes >= 3)','if (_cycleVotes >= _cycleRoundLimit)')\n\
+        \    s=once(s,'\"3/3 ordinary vote requests sent; game server decides counts and removal\"','_cycleVotes\
+        \ + \"/\" + _cycleRoundLimit + \" ordinary vote requests sent; game server decides counts and removal\"\
+        ')\n    s=once(s,'\"Vote \" + _cycleVotes + \"/3 requested; exiting on the next game update\"','\"Vote \"\
+        \ + _cycleVotes + \"/\" + _cycleRoundLimit + \" requested; exiting on the next game update\"')\n    return\
+        \ s\nedit(root/'ClientFeatures.cs',client)\n# Keep the v4.3.47 menu, add just two controls. Use separate\
+        \ settings, not a new ban-rule schema.\ndef menu(s):\n    a='    public static void addVoteAndActivity(Activity\
+        \ a,LinearLayout p){'\n    s=once(s,a,a+'''\n        title(a,p,\"Host • Whitelist-only lobby\",\"Host-only,\
+        \ pregame. Kicks non-whitelisted players with resolved identities; never bans from this option.\");\n  \
+        \      check(a,p,\"Auto-kick everyone except whitelist\",\"OFF by default. One normal kick per second; existing\
+        \ auto-ban list settings remain independent.\",UTILITY,\"KickEveryoneExceptWhitelist\",false);\n       \
+        \ title(a,p,\"Individual vote sequence\",\"Choose total vote rounds. 3 rounds = up to 2 rejoins; 4 rounds\
+        \ = up to 3. Existing vote sequence option must be enabled.\");\n        android.widget.RadioGroup rounds=new\
+        \ android.widget.RadioGroup(a);\n        rounds.setOrientation(LinearLayout.HORIZONTAL);\n        android.widget.RadioButton\
+        \ three=new android.widget.RadioButton(a),four=new android.widget.RadioButton(a);\n        three.setId(View.generateViewId());four.setId(View.generateViewId());\n\
+        \        three.setText(\"3 rounds\");four.setText(\"4 rounds\");three.setTextColor(FG);four.setTextColor(FG);\n\
+        \        rounds.addView(three);rounds.addView(four);p.addView(rounds,new LinearLayout.LayoutParams(-1,-2));\n\
+        \        final String voteSettings=\"LobbyGuardian-client-settings.json\";\n        rounds.check(enabled(a,voteSettings,\"\
+        VoteRejoinFour\",false)?four.getId():three.getId());\n        rounds.setOnCheckedChangeListener((group,id)->set(a,voteSettings,\"\
+        VoteRejoinFour\",id==four.getId()));\n''')\n    return s\nedit(ui,menu)\nprint('v4.3.47 source patch applied:\
+        \ isolated whitelist-only kick mode and individual 3/4 round selector')\n\nPY_PATCH"
+    - name: Add isolated target vote repeat settings
+      shell: bash
+      run: "python3 - <<'PY_TARGET'\nfrom pathlib import Path\nroot=Path('LobbyGuardian/Plugin')\nui=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')\n\
+        def once(s,a,b):\n    assert s.count(a)==1,(a[:100],s.count(a))\n    return s.replace(a,b,1)\np=root/'LobbyRaidGuard.cs';\
+        \ s=p.read_text()\ns=once(s,'// A single vote per room/identity per app session; no leave/rejoin repetition.','//\
+        \ One target command per room/identity; client owns any optional bounded sequence.')\ns=once(s,'type=\"\
+        vote-kick\",targetClientId=p.ClientId','type=\"vote-target-auto\",targetClientId=p.ClientId')\ns=once(s,'\"\
+        One standard vote queued for \"+p.Name+\"; game threshold still applies; no automatic repeat\"','\"Target\
+        \ vote queued for \"+p.Name+\"; separate target repeat setting controls sequence; server decides removal\"\
+        ')\np.write_text(s)\np=root/'ClientFeatures.cs';s=p.read_text()\ns=once(s,'    private static bool _cycleAllTargets,\
+        \ _cycleForceThree;','    private static bool _cycleAllTargets, _cycleForceThree, _cycleAutoTarget;')\n\
+        s=once(s,'        if (commandType != \"vote-kick\" && commandType != \"vote-kick-loop\") return;', ''' \
+        \       bool autoTarget = commandType == \"vote-target-auto\";\n        if (!autoTarget && commandType !=\
+        \ \"vote-kick\" && commandType != \"vote-kick-loop\") return;\n        if (autoTarget && !ReadSetting(\"\
+        RaidTargetAutoVote\")) { Status(\"vote-ignored\", \"Target auto vote is OFF\"); return; }''')\ns=once(s,'\
+        \            if (commandType == \"vote-kick-loop\" && ReadSetting(\"VoteRejoinThree\"))','''           \
+        \ bool repeat = autoTarget ? ReadSetting(\"RaidTargetVoteRepeat\") :\n                commandType == \"\
+        vote-kick-loop\" && ReadSetting(\"VoteRejoinThree\");\n            if (repeat)''')\ns=once(s,'         \
+        \           _cycleRoundLimit = ReadSetting(\"VoteRejoinFour\") ? 4 : 3;', '''                    _cycleAutoTarget\
+        \ = autoTarget;\n                    _cycleRoundLimit = ReadSetting(autoTarget ? \"RaidTargetVoteFour\"\
+        \ : \"VoteRejoinFour\") ? 4 : 3;''')\ns=once(s,'        _cycleForceThree=true;','        _cycleForceThree=true;\\\
+        n        _cycleAutoTarget=false;')\ns=once(s,'        _cycleForceThree = false;','        _cycleForceThree\
+        \ = false;\\n        _cycleAutoTarget = false;')\ns=once(s,'        if (!_cycleForceThree && !ReadSetting(\"\
+        VoteRejoinThree\")) { CancelVoteCycle(\"Toggle switched off\"); return; }','''        if (_cycleAutoTarget)\n\
+        \        {\n            if (!ReadSetting(\"RaidTargetAutoVote\") || !ReadSetting(\"RaidTargetVoteRepeat\"\
+        ))\n            { CancelVoteCycle(\"Target vote repeat switched off\"); return; }\n        }\n        else\
+        \ if (!_cycleForceThree && !ReadSetting(\"VoteRejoinThree\")) { CancelVoteCycle(\"Toggle switched off\"\
+        ); return; }''')\np.write_text(s)\ns=ui.read_text()\na='        rounds.setOnCheckedChangeListener((group,id)->set(a,voteSettings,\"\
+        VoteRejoinFour\",id==four.getId()));'\ns=once(s,a,a+'''\n        title(a,p,\"Target vote-kick sequence\"\
+        ,\"Separate from the individual vote sequence. The existing target auto-vote setting must be ON. Repeat\
+        \ OFF leaves one normal vote.\");\n        check(a,p,\"Repeat target vote-kick\",\"OFF by default. Turning\
+        \ this off stops the target sequence.\",voteSettings,\"RaidTargetVoteRepeat\",false);\n        android.widget.RadioGroup\
+        \ targetRounds=new android.widget.RadioGroup(a);\n        targetRounds.setOrientation(LinearLayout.HORIZONTAL);\n\
+        \        android.widget.RadioButton targetThree=new android.widget.RadioButton(a),targetFour=new android.widget.RadioButton(a);\n\
+        \        targetThree.setId(View.generateViewId());targetFour.setId(View.generateViewId());\n        targetThree.setText(\"\
+        3 target rounds\");targetFour.setText(\"4 target rounds\");\n        targetThree.setTextColor(FG);targetFour.setTextColor(FG);\n\
+        \        targetRounds.addView(targetThree);targetRounds.addView(targetFour);p.addView(targetRounds,new LinearLayout.LayoutParams(-1,-2));\n\
+        \        targetRounds.check(enabled(a,voteSettings,\"RaidTargetVoteFour\",false)?targetFour.getId():targetThree.getId());\n\
+        \        targetRounds.setOnCheckedChangeListener((group,id)->set(a,voteSettings,\"RaidTargetVoteFour\",id==targetFour.getId()));\n\
+        ''')\nui.write_text(s)\nprint('Target vote controls independently wired')\n\nPY_TARGET"
+    - name: Run compiled whitelist tests and vote limit wiring checks
+      shell: bash
+      run: "set -e\nT=$(mktemp -d)\ndotnet new console --framework net10.0 --output \"$T\" --no-restore\ncp LobbyGuardian/Plugin/ModerationRules.cs\
+        \ \"$T/ModerationRules.cs\"\ncat > \"$T/Program.cs\" <<'CS'\nusing System;\nusing LobbyGuardian;\nstatic\
+        \ void Check(bool value,string label){if(!value)throw new Exception(label); Console.WriteLine(\"PASS \"\
+        +label);}\nvar r=new RuleSettings();\nr.AllowFriendCodes.Add(\"friend#1234\"); r.AllowPuids.Add(\"allowed-puid\"\
+        ); r.AllowNamesExact.Add(\"Trusted\");\nr.AutoBanEnabled=true; r.BanFriendCodes.Add(\"blocked#0000\");\n\
+        var p=new PlayerIdentity {ClientId=9,FriendCode=\"blocked#0000\",Puid=\"other-puid\",Name=\"Guest\"};\n\
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Ban,\"original ban list still works\");\n\
+        Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Kick,\"new admission rule never\
+        \ bans\");\nCheck(ModerationRules.WhitelistOnlyKick(r,p,false).Action==ModerationAction.Allow,\"non-host\
+        \ no action\");\np.IsLocal=true;Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        self excluded\");p.IsLocal=false;\np.IsHost=true;Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        host excluded\");p.IsHost=false;\np.FriendCode=\" FRIEND#1234 \";Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        friend code whitelist\");\np.FriendCode=\"blocked#0000\";p.Puid=\"allowed-puid\";Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        PUID whitelist\");\np.Puid=\"other-puid\";p.Name=\"trusted\";Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        name whitelist\");\np.Name=\"Guest\";p.FriendCode=\"\";Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        unresolved friend code deferred\");\np.FriendCode=\"blocked#0000\";p.Puid=\"\";Check(ModerationRules.WhitelistOnlyKick(r,p,true).Action==ModerationAction.Allow,\"\
+        unresolved PUID deferred\");\nr.AutoBanEnabled=false;p.Puid=\"other-puid\";Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Allow,\"\
+        original ban OFF honored\");\nCS\ndotnet run --project \"$T\" --configuration Release\npython3 - <<'PY'\n\
+        from pathlib import Path\ns=Path('LobbyGuardian/Plugin/ClientFeatures.cs').read_text()\nassert '_cycleRoundLimit\
+        \ = ReadSetting(autoTarget ? \"RaidTargetVoteFour\" : \"VoteRejoinFour\") ? 4 : 3;' in s\nassert 'if (!ReadSetting(\"\
+        RaidTargetAutoVote\") || !ReadSetting(\"RaidTargetVoteRepeat\"))' in s\nassert 'bool repeat = autoTarget\
+        \ ? ReadSetting(\"RaidTargetVoteRepeat\")' in s\nassert 'type=\"vote-target-auto\"' in Path(\"LobbyGuardian/Plugin/LobbyRaidGuard.cs\"\
+        ).read_text()\nassert '_cycleJoinRequests >= _cycleRoundLimit - 1' in s\nassert s.count('if (_cycleVotes\
+        \ >= _cycleRoundLimit)')==2\nassert 'if (_lastExitRestricted) { CancelVoteCycle(\"Server kick/ban reported;\
+        \ no retry\"); return; }' in s\nassert '_cycleRoundLimit=3;' in s\nfor limit in (3,4):\n    assert limit-1\
+        \ in (2,3)\nprint('Vote limit wiring checks passed (not network tests)')\nPY"
+    - name: Wire original Trolls and Host menu controls
+      shell: bash
+      run: "python3 - <<'PY_47C'\nfrom pathlib import Path\nimport re\nroot=Path('LobbyGuardian/Plugin')\njava=Path('fusionApp/src/main/java/dev/allofus/fusioncore')\n\
+        def once(s,a,b):\n    assert s.count(a)==1,(a[:150],s.count(a))\n    return s.replace(a,b,1)\np=root/'ModerationRules.cs';s=p.read_text()\n\
+        s=once(s,'    public bool BanEveryone { get; set; } = false;','    public bool BanEveryone { get; set; }\
+        \ = false;\\n    public bool KickEveryoneExceptWhitelist { get; set; } = false;')\ns=once(s,'        if\
+        \ (rules.BanEveryone)\\n','        if (rules.BanEveryone && !rules.KickEveryoneExceptWhitelist)\\n')\ns=once(s,'\
+        \        if (rules.AutoKickEnabled)\\n','        if (rules.KickEveryoneExceptWhitelist)\\n            return\
+        \ WhitelistOnlyKick(rules, player, localIsHost);\\n        if (rules.AutoKickEnabled)\\n')\np.write_text(s)\n\
+        p=root/'ClientFeatures.cs';s=p.read_text()\ns=once(s,'internal static bool IsConnectedPregame() => string.Equals(Get(GameBridge.Client,\
+        \ \"GameState\")?.ToString(), \"Joined\", StringComparison.OrdinalIgnoreCase) && IsLobby();','internal static\
+        \ bool IsConnectedPregame() => string.Equals(Get(GameBridge.Client, \"GameState\")?.ToString(), \"Joined\"\
+        , StringComparison.OrdinalIgnoreCase);')\ns=once(s,'\"/3; reconnecting as soon as the disconnected state\
+        \ is stable\"','\"/\" + _cycleRoundLimit + \"; reconnecting as soon as the disconnected state is stable\"\
+        ')\np.write_text(s)\np=root/'LobbyGuardianPlugin.cs';s=p.read_text()\na=s.index('    private void SweepWhitelistOnly()');b=s.index('\
+        \    private void ProcessIdentity(',a)\ns=s[:a]+'''    private void SweepWhitelistOnly()\n    {\n      \
+        \  var now=DateTimeOffset.UtcNow;\n        if(now<_nextWhitelistSweep) return;\n        _nextWhitelistSweep=now.AddSeconds(1);\n\
+        \        try\n        {\n            if(!GameBridge.IsHost() || !ClientFeatures.IsConnectedPregame() ||\
+        \ !File.Exists(_rulesPath)) return;\n            var rules=RuleStore.LoadOrCreate(_rulesPath);\n       \
+        \     if(!rules.KickEveryoneExceptWhitelist) return;\n            // Same identity source and decision engine\
+        \ as the original working join hook.\n            var players=GameBridge.ReadConnectedPlayers().Concat(GameBridge.ReadVotingRoster())\n\
+        \                .Where(p=>p.ClientId>=0 && !p.IsLocal && !p.IsHost)\n                .GroupBy(p=>p.ClientId)\n\
+        \                .Select(g=>g.OrderByDescending(p=>!string.IsNullOrWhiteSpace(p.FriendCode))\n         \
+        \           .ThenByDescending(p=>!string.IsNullOrWhiteSpace(p.Puid)).First());\n            foreach(var\
+        \ player in players)\n            {\n                var decision=ModerationRules.OnJoin(rules,player,true);\n\
+        \                if(decision.Action!=ModerationAction.Kick) continue;\n                if(!GameBridge.IsHost()\
+        \ || !ClientFeatures.IsConnectedPregame()) return;\n                if(!RuleStore.LoadOrCreate(_rulesPath).KickEveryoneExceptWhitelist)\
+        \ return;\n                if(DispatchHostDecision(player,decision,\"whitelist-only\")) break;\n       \
+        \     }\n        }\n        catch(Exception e){_events?.Write(\"whitelist-only\",\"error\",Explain(e));}\n\
+        \    }\n\n'''+s[b:]\na=s.index('        if (decision.Action != ModerationAction.Ban && decision.Action !=\
+        \ ModerationAction.Kick) return;',s.index('    private void ProcessIdentity('));b=s.index('\\n    public\
+        \ override bool Unload()',a)\ns=s[:a]+'''        if (settings.KickEveryoneExceptWhitelist && decision.Action==ModerationAction.Kick\
+        \ && !ClientFeatures.IsConnectedPregame()) return;\n        DispatchHostDecision(player,decision,\"player-joined\"\
+        );\n    }\n\n    private bool DispatchHostDecision(PlayerIdentity player,Decision decision,string source)\n\
+        \    {\n        if(decision.Action!=ModerationAction.Ban && decision.Action!=ModerationAction.Kick) return\
+        \ false;\n        if(!GameBridge.IsHost() || player.IsLocal || player.IsHost) return false;\n        if(!_banThrottle.CanSend(player.ClientId,DateTimeOffset.UtcNow))\
+        \ return false;\n        bool isBan=decision.Action==ModerationAction.Ban;\n        bool dispatched=isBan?GameBridge.Ban(player):GameBridge.Kick(player);\n\
+        \        if(!dispatched) _banThrottle.Forget(player.ClientId);\n        HostExtras.ModerationNotice(isBan?\"\
+        ban\":\"kick\",player,decision.Reason,dispatched);\n        _events?.Write(source,dispatched?(isBan?\"ban-requested\"\
+        :\"kick-requested\"):\"moderation-failed\",decision.Reason,player.Name);\n        return true; // One attempted\
+        \ dispatch per sweep, even on failure.\n    }\n'''+s[b:];p.write_text(s)\n# Remove the misplaced duplicate\
+        \ controls; original host and Trolls sections will own their settings.\np=java/'GuardianUnifiedExtras.java';s=p.read_text()\n\
+        a=s.index('        title(a,p,\"Host • Whitelist-only lobby\"');b=s.index('        title(a,p,\"Host • End\
+        \ active match\"',a)\ns=s[:a]+s[b:];p.write_text(s)\n# Match the exact original overlay helpers, not an\
+        \ unrelated tab. The archived DEX confirms\n# the show() method calls clientCheck(Activity, LinearLayout,\
+        \ JSONObject, String, String)\n# and check(Activity, LinearLayout, JSONObject, String, String, boolean).\n\
+        p=java/'LobbyGuardianOverlay.java';s=p.read_text().replace(r'\\u00d7','×').replace(r'\\u00D7','×')\ndef\
+        \ add_after_call(source,method,key,label,new_calls):\n    pattern=r'\\b'+method+r'\\s*\\([^;]*?\\)\\s*;'\n\
+        \    hits=[m for m in re.finditer(pattern,source,re.S) if '\"'+key+'\"' in m.group() and '\"'+label+'\"\
+        ' in m.group()]\n    assert len(hits)==1,(method,key,label,len(hits))\n    m=hits[0];original=m.group();insert=[]\n\
+        \    for new_key,new_label in new_calls:\n        c=once(original,'\"'+key+'\"','\"'+new_key+'\"')\n   \
+        \     c=once(c,'\"'+label+'\"','\"'+new_label+'\"')\n        insert.append(c)\n    return source[:m.end()]+'\\\
+        n            '+'\\n            '.join(insert)+source[m.end():]\ns=add_after_call(s,'clientCheck','VoteRejoinThree','3×\
+        \ rejoin (experimental)',[\n    ('VoteRejoinFour','4 vote rounds instead of 3')])\ns=add_after_call(s,'clientCheck','RaidTargetAutoVote','Auto-vote\
+        \ selected target once',[\n    ('RaidTargetVoteRepeat','Repeat target vote-kick (ON/OFF)'),('RaidTargetVoteFour','4\
+        \ target vote rounds instead of 3')])\ns=once(s,'\"Auto-vote selected target once\"','\"Auto-vote selected\
+        \ target\"')\ns=once(s,'\"3× rejoin (experimental)\"','\"Repeat individual vote-kick (ON/OFF)\"')\ns=add_after_call(s,'check','BanEveryone','Ban\
+        \ everyone except whitelist',[\n    ('KickEveryoneExceptWhitelist','Auto-kick everyone except whitelist')])\n\
+        p.write_text(s)\n# Verify each original setting is now adjacent to its new controls and no duplicate remains\
+        \ in extras.\nassert s.index('\"VoteRejoinFour\"')>s.index('\"Repeat individual vote-kick (ON/OFF)\"')\n\
+        assert s.index('\"RaidTargetVoteRepeat\"')>s.index('\"Auto-vote selected target\"')\nassert s.index('\"\
+        KickEveryoneExceptWhitelist\"')>s.index('\"Ban everyone except whitelist\"')\nassert 'RaidTargetVoteRepeat'\
+        \ not in (java/'GuardianUnifiedExtras.java').read_text()\nprint('Original overlay controls and shared host\
+        \ moderation path patched')\nPY_47C"
+    - name: Regression tests for shared host kick and original ban rules
+      shell: bash
+      run: 'set -e
+
+        T=$(mktemp -d)
+
+        dotnet new console --framework net10.0 --output "$T" --no-restore
+
+        cp LobbyGuardian/Plugin/ModerationRules.cs "$T/ModerationRules.cs"
+
+        cat > "$T/Program.cs" <<''CS''
+
+        using System;
+
+        using LobbyGuardian;
+
+        static void Check(bool ok,string label){if(!ok)throw new Exception(label);Console.WriteLine("PASS "+label);}
+
+        var r=new RuleSettings();
+
+        var p=new PlayerIdentity {ClientId=7,FriendCode="visitor#1234",Puid="visitor-id",Name="Visitor"};
+
+        r.AllowFriendCodes.Add("trusted#0000");
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Allow,"new option defaults OFF");
+
+        r.KickEveryoneExceptWhitelist=true;
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Kick,"kick mode independent of auto-ban
+        and kick list switches");
+
+        Check(ModerationRules.OnJoin(r,p,false).Action==ModerationAction.Allow,"host only");
+
+        p.FriendCode="trusted#0000";
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Allow,"whitelist protected");
+
+        p.FriendCode="visitor#1234";
+
+        r.AutoBanEnabled=true;r.BanEveryone=true;
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Kick,"kick mode wins over bulk ban if both
+        enabled");
+
+        r.BanFriendCodes.Add(p.FriendCode);
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Ban,"explicit original ban list preserved");
+
+        r.BanFriendCodes.Clear();r.KickEveryoneExceptWhitelist=false;
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Ban,"original bulk ban restored when kick
+        option OFF");
+
+        r.BanEveryone=false;r.AutoBanEnabled=false;r.AutoKickEnabled=true;r.KickFriendCodes.Add(p.FriendCode);
+
+        Check(ModerationRules.OnJoin(r,p,true).Action==ModerationAction.Kick,"original kick list preserved");
+
+        CS
+
+        dotnet run --project "$T" --configuration Release
+
+        python3 - <<''PY''
+
+        from pathlib import Path
+
+        p=Path(''LobbyGuardian/Plugin/LobbyGuardianPlugin.cs'').read_text()
+
+        assert ''DispatchHostDecision(player,decision,"player-joined")'' in p
+
+        assert ''DispatchHostDecision(player,decision,"whitelist-only")'' in p
+
+        assert ''GameBridge.Ban(player):GameBridge.Kick(player)'' in p
+
+        bridge=Path(''LobbyGuardian/Plugin/GameBridge.cs'').read_text()
+
+        assert ''method.Invoke(client, new object[] { player.ClientId, false });'' in bridge
+
+        print(''Native kick argument and shared dispatch verified in source'')
+
+        PY'
+    - name: Compile final plugin
+      run: dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore --no-incremental
+    - name: Package compiled plugin
+      shell: bash
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport zipfile,hashlib\nasset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')\n\
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()\nfor marker in (b'WhitelistOnlyKick',b'SweepWhitelistOnly',b'_cycleRoundLimit',b'KickEveryoneExceptWhitelist',b'DispatchHostDecision'):\n\
+        \    assert marker in dll,marker\nfor marker in ('VoteRejoinFour','RaidTargetVoteRepeat','RaidTargetVoteFour'):\n\
+        \    assert marker.encode('utf-16le') in dll,marker\nwith zipfile.ZipFile(asset) as old, zipfile.ZipFile(asset.with_suffix('.new.zip'),'w',compression=zipfile.ZIP_DEFLATED)\
+        \ as new:\n    for item in old.infolist():\n        if item.filename.rsplit('/',1)[-1].lower()=='lobbyguardian.plugin.dll':continue\n\
+        \        new.writestr(item,old.read(item))\n    new.writestr('plugins/LobbyGuardian.Plugin.dll',dll)\nasset.with_suffix('.new.zip').replace(asset)\n\
+        print('Final plugin SHA256:',hashlib.sha256(dll).hexdigest())\nPY"
+    - name: Build Android APK
+      run: 'chmod +x gradlew
+
+        ./gradlew :fusionApp:assembleDebug --stacktrace'
+    - name: Verify APK contains final runtime and menu
+      shell: bash
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport io,zipfile,hashlib\nexpected=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()\n\
+        apks=list(Path('fusionApp/build/outputs/apk/debug').glob('*.apk'))\nassert apks,'APK not built'\nfor apk\
+        \ in apks:\n    with zipfile.ZipFile(apk) as a:\n        with zipfile.ZipFile(io.BytesIO(a.read('assets/BepInEx-arm64.zip')))\
+        \ as z:\n            matches=[n for n in z.namelist() if n.rsplit('/',1)[-1].lower()=='lobbyguardian.plugin.dll']\n\
+        \            assert matches==['plugins/LobbyGuardian.Plugin.dll'],matches\n            assert z.read(matches[0])==expected,'Stale\
+        \ DLL in APK'\n        dex=b''.join(a.read(n) for n in a.namelist() if n.endswith('.dex'))\n        for\
+        \ marker in (b'KickEveryoneExceptWhitelist',b'VoteRejoinFour',b'Auto-kick everyone except whitelist',b'4\
+        \ vote rounds instead of 3',b'Repeat individual vote-kick (ON/OFF)',b'RaidTargetVoteRepeat',b'RaidTargetVoteFour',b'Repeat\
+        \ target vote-kick (ON/OFF)',b'4 target vote rounds instead of 3'):\n            assert marker in dex,marker\n\
+        \    print(apk.name, 'verified packaged DLL:',hashlib.sha256(expected).hexdigest())\nPY"
+    - name: Upload verified packaging candidate
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.47c-Android-MenuWiring
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload final sources
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.47c-Sources
+        path: 'LobbyGuardian/Plugin/*.cs
+
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+
+          LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll
+
+          fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java'
+        if-no-files-found: error
