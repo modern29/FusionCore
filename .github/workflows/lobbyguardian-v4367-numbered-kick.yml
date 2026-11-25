@@ -1,0 +1,543 @@
+name: Lobby Guardian v4.3.67 - Numbered-code kick only
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4367-numbered-kick.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout FusionCore
+      uses: actions/checkout@v4
+    - name: Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: .NET 10
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - name: Gradle
+      uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Replay v4.3.62 source stages
+      shell: bash
+      run: "python3 - <<'PY_REPLAY'\nfrom pathlib import Path\nimport subprocess, tempfile, yaml\nold=Path('.github/workflows/lobbyguardian-v4362-bot-observation-toggle.yml')\n\
+        assert old.is_file(), 'v4.3.62 workflow required in same repository'\nsteps=yaml.safe_load(old.read_text())['jobs']['android']['steps']\n\
+        for step in steps:\n    name=step.get('name','')\n    if name=='Build v4.3.62 Android APK': break\n    if not step.get('run')\
+        \ or name=='Install PyYAML': continue\n    print('>>> '+name,flush=True)\n    with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False)\
+        \ as f:\n        f.write(step['run']); filename=f.name\n    try: subprocess.run(['bash','-eo','pipefail',filename],check=True)\n\
+        \    finally: Path(filename).unlink(missing_ok=True)\nelse: raise RuntimeError('Build anchor not found')\nPY_REPLAY"
+    - name: Separate protection controls and restore history
+      shell: bash
+      run: "python3 - <<'PY_4363'\nfrom pathlib import Path\nimport re\nroot=Path('LobbyGuardian/Plugin')\ndef replace(s,old,new):\n\
+        \    assert s.count(old)==1, (old[:150],s.count(old))\n    return s.replace(old,new,1)\nq=root/'HostModerationQueue.cs';s=q.read_text()\n\
+        s=replace(s,'public bool BotRule;','public bool BotRule; public bool HackerRule;')\ns=replace(s,'autoEnabled,botEnabled;','autoEnabled,botEnabled,hackerEnabled;')\n\
+        s=replace(s,'digitEnabled=botEnabled;','digitEnabled=botEnabled;hackerEnabled=d.RootElement.TryGetProperty(\"AutoBanHackers\"\
+        ,out var hackers)&&hackers.ValueKind==JsonValueKind.True;')\ns=replace(s,'botEnabled=false;}','botEnabled=false;hackerEnabled=false;}')\n\
+        s=replace(s,'    internal static bool EnqueueBotAction','    internal static bool HackerAutoBanEnabled(){lock(Gate){AutomaticEnabled();return\
+        \ hackerEnabled;}}\\n    internal static bool EnqueueHackerAction(PlayerIdentity p,bool ban)=>Enqueue(p,ban,false,false,false,true);\\\
+        n    internal static bool EnqueueBotAction')\ns=replace(s,'bool botRule=false)','bool botRule=false,bool hackerRule=false)')\n\
+        s=replace(s,'(botRule&&!BotAutoBanEnabled())||!(digitRule?DigitRuleAvailable():AutomaticEnabled())','(botRule&&!BotAutoBanEnabled())||(hackerRule&&!HackerAutoBanEnabled())||!(digitRule?DigitRuleAvailable():botRule?BotAutoBanEnabled():hackerRule?HackerAutoBanEnabled():AutomaticEnabled())')\n\
+        s=replace(s,'existing.BotRule!=botRule)','existing.BotRule!=botRule||existing.HackerRule!=hackerRule)')\ns=replace(s,'BotRule=botRule,At=now','BotRule=botRule,HackerRule=hackerRule,At=now')\n\
+        s=replace(s,'botAutoBanEnabled=botEnabled,','botAutoBanEnabled=botEnabled,hackerAutoBanEnabled=hackerEnabled,')\n\
+        s=replace(s,'(x.Value.BotRule&&!botEnabled)||(x.Value.DigitRule?!digitsReady:(x.Value.Handle==0&&!otherAuto))','(x.Value.BotRule&&!botEnabled)||(x.Value.HackerRule&&!hackerEnabled)||(x.Value.DigitRule?!digitsReady:(!x.Value.BotRule&&!x.Value.HackerRule&&x.Value.Handle==0&&!otherAuto))')\n\
+        q.write_text(s)\np=root/'BauStyleAntiCheat.cs';s=p.read_text()\ns=replace(s,'HostModerationQueue.EnqueueBotAction(player,true)','HostModerationQueue.EnqueueHackerAction(player,true)')\n\
+        s=replace(s,'!_autoBanConfirmed||!HostModerationQueue.BotAutoBanEnabled()||!GameBridge.IsHost()','!HostModerationQueue.HackerAutoBanEnabled()||!GameBridge.IsHost()')\n\
+        p.write_text(s)\np=root/'RecentPlayerHistory.cs';s=p.read_text()\ns=replace(s,'    private static bool Loaded;','\
+        \    private static bool Loaded;\\n    private static DateTimeOffset NextCapture;')\ns=replace(s,'    internal static\
+        \ void Observe(int room,IEnumerable<PlayerIdentity> players){','''    internal static void CaptureTick(){\n      \
+        \  var now=DateTimeOffset.UtcNow;\n        if(now<NextCapture)return;NextCapture=now.AddMilliseconds(500);\n     \
+        \   try{\n            int room=GameBridge.SessionRoom;\n            if(room==0||room==-1||!GameBridge.IsPregameLobby())return;\n\
+        \            var players=GameBridge.ReadVotingRoster();\n            if(players.Length>0)Observe(room,players);\n\
+        \        }catch(Exception ex){Status(\"capture-error\",ex.GetType().Name);}\n    }\n    internal static void CaptureJoin(object?\
+        \ data){\n        try{\n            if(data==null)return;int room=GameBridge.SessionRoom;\n            if(room==0||room==-1||!GameBridge.IsPregameLobby())return;\n\
+        \            var joined=GameBridge.Read(data);\n            var roster=GameBridge.ReadVotingRoster().Where(x=>x.ClientId!=joined.ClientId).ToList();\n\
+        \            if(joined.ClientId>=0&&!joined.IsLocal&&!string.IsNullOrWhiteSpace(joined.FriendCode))roster.Add(joined);\n\
+        \            if(roster.Count>0)Observe(room,roster);\n        }catch(Exception ex){Status(\"join-error\",ex.GetType().Name);}\n\
+        \    }\n    private static void Status(string state,string detail){\n        try{File.WriteAllText(Path.Combine(Paths.ConfigPath,\"\
+        LobbyGuardian-player-history-status.json\"),JsonSerializer.Serialize(new{state,detail,atUtc=DateTimeOffset.UtcNow.ToString(\"\
+        O\"),records=History.Count,withCode=History.Count(x=>!string.IsNullOrWhiteSpace(x.friendCode))}));}catch{}\n    }\n\
+        \    internal static void Observe(int room,IEnumerable<PlayerIdentity> players){''')\ns=replace(s,'            File.WriteAllText(temp,JsonSerializer.Serialize(History));','\
+        \            Directory.CreateDirectory(Paths.ConfigPath);\\n            File.WriteAllText(temp,JsonSerializer.Serialize(History));')\n\
+        s=replace(s,'            File.Move(temp,file,true);\\n        }}catch{}','            File.Move(temp,file,true);\\\
+        n            Status(\"saved\",\"Recent players saved\");\\n        }}catch(Exception ex){Status(\"write-error\",ex.GetType().Name);}')\n\
+        p.write_text(s)\np=root/'LobbyGuardianPlugin.cs';s=p.read_text()\npattern=r'(\\b(?:private|internal|public)\\s+static\\\
+        s+void\\s+ClientUpdatePostfix\\s*\\([^)]*\\)\\s*\\{)'\ns,n=re.subn(pattern,r'\\1\\n        RecentPlayerHistory.CaptureTick();',s,count=1)\n\
+        assert n==1,'Client update hook not found'\npattern=r'(\\b(?:private|internal|public)\\s+static\\s+void\\s+BotJoinedPostfix\\\
+        s*\\(\\s*object\\s+__0\\s*\\)\\s*\\{)'\ns,n=re.subn(pattern,r'\\1 RecentPlayerHistory.CaptureJoin(__0); ',s,count=1)\n\
+        if n==0:\n    pattern=r'\\bprivate\\s+static\\s+void\\s+BotJoinedPostfix\\s*\\(\\s*object\\s+__0\\s*\\)\\s*=>\\s*ConnectionBotGuard\\\
+        .Joined\\(__0\\);'\n    s,n=re.subn(pattern,'private static void BotJoinedPostfix(object __0) { RecentPlayerHistory.CaptureJoin(__0);\
+        \ ConnectionBotGuard.Joined(__0); }',s,count=1)\nassert n==1,'Join recording hook not found'\np.write_text(s)\np=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java');s=p.read_text()\n\
+        a=s.index('    private static void collapseLegacyRpcControls(')\nb=s.index('    public static void addHostResilience(',a)\n\
+        s=s[:a]+'''    private static void protectionToggle(Activity a,LinearLayout p,String name,String key){\n        Button\
+        \ b=new Button(a);b.setAllCaps(false);b.setTextColor(FG);b.setTextSize(14);\n        b.setTag(\"guardian-clean-protection\"\
+        );\n        Runnable refresh=()->b.setText((enabled(a,UTILITY,key,false)?\"Turn off auto-ban \":\"Turn on auto-ban\
+        \ \")+name);\n        refresh.run();p.addView(b,new LinearLayout.LayoutParams(-1,-2));\n        b.setOnClickListener(v->{set(a,UTILITY,key,!enabled(a,UTILITY,key,false));refresh.run();});\n\
+        \    }\n    private static void collapseLegacyRpcControls(android.view.ViewGroup root){\n        for(int i=0;i<root.getChildCount();i++){\n\
+        \            View child=root.getChildAt(i);\n            if(child instanceof TextView && !\"guardian-clean-protection\"\
+        .equals(child.getTag())){\n                String t=((TextView)child).getText().toString().trim().toLowerCase(java.util.Locale.ROOT);\n\
+        \                boolean keep=t.equals(\"rpc protection & diagnostics\")||t.equals(\"copy numbered friend code history\"\
+        )||t.equals(\"copy recent player history\");\n                boolean legacy=t.contains(\"rpc\")||((t.contains(\"\
+        auto-ban\")||t.contains(\"auto ban\")||t.contains(\"autoban\"))&&(t.contains(\"bot\")||t.contains(\"hack\")||t.contains(\"\
+        flood\")||t.contains(\"cheat\")))||t.contains(\"experimental automatic moderation\")||t.contains(\"bot & rpc\")||t.contains(\"\
+        bot protection diagnostics\");\n                if(!keep&&legacy){\n                    child.setVisibility(View.GONE);\n\
+        \                    if(child instanceof CheckBox&&i+1<root.getChildCount()){\n                        View note=root.getChildAt(i+1);\n\
+        \                        if(note.getClass()==TextView.class)note.setVisibility(View.GONE);\n                    }\n\
+        \                }\n            }\n            if(child instanceof android.view.ViewGroup)collapseLegacyRpcControls((android.view.ViewGroup)child);\n\
+        \        }\n    }\n    private static void cleanProtectionPage(LinearLayout p){\n        android.view.ViewParent parent=p.getParent();\n\
+        \        android.view.ViewGroup page=parent instanceof android.view.ViewGroup?(android.view.ViewGroup)parent:p;\n\
+        \        collapseLegacyRpcControls(page);\n    }\n'''+s[b:]\na=s.index('        check(a,p,\"Auto-ban suspected bots\"\
+        ')\nb=s.index('        button(a,p,\"Review / remove unknown players\"',a)\ns=s[:a]+'''        protectionToggle(a,p,\"\
+        bots\",\"AutoBanSuspectedBots\");\n        protectionToggle(a,p,\"hackers\",\"AutoBanHackers\");\n'''+s[b:]\ns=replace(s,'p.post(()->collapseLegacyRpcControls(p));','p.post(()->cleanProtectionPage(p));\\\
+        n        p.postDelayed(()->cleanProtectionPage(p),500);')\ns=replace(s,'b.append(\"\\\\nAutomatic moderation: \").append(enabled(a,UTILITY,\"\
+        ExperimentalAutomaticModeration\",false)?\"Experimental ON\":\"OFF — stability isolation\");','b.append(\"\\\\nHacker\
+        \ auto-ban: \").append(enabled(a,UTILITY,\"AutoBanHackers\",false)?\"ON\":\"OFF\");')\ns=replace(s,'String code=e.optString(\"\
+        friendCode\",\"\").trim();','String code=e.optString(\"friendCode\",e.optString(\"FriendCode\",\"\")).trim();')\n\
+        s=replace(s,'for(String key:new String[]{\"name\",\"friendCode\",\"puid\",\"platform\",\"lastSeenUtc\"})item.put(key,e.optString(key,\"\
+        \"));','for(String key:new String[]{\"name\",\"friendCode\",\"platform\",\"lastSeenUtc\"})item.put(key,e.optString(key,\"\
+        \"));\\n                item.put(\"friendCode\",code);')\ns=replace(s,'if(count==0){alert(a,\"Recent player history\"\
+        ,','if(count==0){JSONObject hs=json(path(a,\"LobbyGuardian-player-history-status.json\"));alert(a,\"Recent player\
+        \ history\",')\ns=replace(s,'+\"\\\\nTry again after joining a lobby. No clipboard changes made.\");return;}','+\"\
+        \\\\nRecorder: \"+hs.optString(\"state\",\"No capture recorded yet\")+\" — \"+hs.optString(\"detail\",\"\")+\"\\\\\
+        nNo clipboard changes made.\");return;}')\np.write_text(s)\nassert s.count('protectionToggle(a,p,\"bots\"')==1\nassert\
+        \ s.count('protectionToggle(a,p,\"hackers\"')==1\nassert s.count('button(a,p,\"RPC protection & diagnostics\"')==1\n\
+        print('Independent host protection buttons and live history capture installed')\nPY_4363"
+    - name: Repair runtime settings, history and local name on exit
+      shell: bash
+      run: "python3 - <<'PY_4364'\nfrom pathlib import Path\nimport re\nroot=Path('LobbyGuardian/Plugin')\ndef edit(path,fn):\n\
+        \    s=path.read_text(); t=fn(s); assert t!=s, str(path); path.write_text(t)\ndef one(s,a,b):\n    assert s.count(a)==1,(a[:100],s.count(a));return\
+        \ s.replace(a,b,1)\n# Re-read immediately at the final native action, not only when enqueuing.\ndef queue(s):\n  \
+        \  s=one(s,'if(now<nextSetting)return autoEnabled;nextSetting=now.AddSeconds(1);','nextSetting=now;')\n    s=one(s,'bool\
+        \ ok=GameBridge.SessionRoom==sendingRoom','bool permitted=send.Handle!=0||(send.BotRule?BotAutoBanEnabled():send.HackerRule?HackerAutoBanEnabled():AutomaticEnabled());\
+        \ if(!permitted){lock(Gate){awaiting=-1;Sent.Remove(target.ClientId);last=\"Cancelled: automatic moderation is OFF\"\
+        ;Publish();}return;} bool ok=GameBridge.SessionRoom==sendingRoom')\n    # Legacy automatic paths are disabled unless\
+        \ the appropriate master permits them.\n    s=one(s,'return autoEnabled;}','return autoEnabled&&(botEnabled||hackerEnabled);}')\n\
+        \    return s\nedit(root/'HostModerationQueue.cs',queue)\n# RPC signature decisions belong to the hacker toggle and\
+        \ must not bypass the queue.\np=root/'RpcAutoBanGuard.cs'\nif p.exists():\n    s=p.read_text();s=s.replace('GameBridge.Ban(players[0])','HostModerationQueue.EnqueueHackerAction(players[0],true)');p.write_text(s)\n\
+        # Capture actual network and visible player records; retain previously recorded codes.\ndef history(s):\n    s=one(s,'if(room==0||room==-1||!GameBridge.IsPregameLobby())return;\\\
+        n        var players=GameBridge.ReadVotingRoster();','if(room==0||room==-1||!GameBridge.IsConnectedSession())return;\\\
+        n        var players=GameBridge.ReadConnectedPlayers().Concat(GameBridge.ReadVotingRoster()).ToArray();') if 'if(room==0||room==-1||!GameBridge.IsPregameLobby())return;\\\
+        n        var players=GameBridge.ReadVotingRoster();' in s else re.sub(r'if\\(room==0\\|\\|room==-1\\|\\|!GameBridge\\\
+        .IsPregameLobby\\(\\)\\)return;\\s*var players=GameBridge\\.ReadVotingRoster\\(\\);','if(room==0||room==-1||!GameBridge.IsConnectedSession())return;\\\
+        n                var players=GameBridge.ReadConnectedPlayers().Concat(GameBridge.ReadVotingRoster()).ToArray();',s,count=1)\n\
+        \    s=one(s,'var live=players.Where(x=>x.ClientId>=0&&!x.IsLocal).Take(30).ToArray();','if(room==0||room==-1)return;\\\
+        n            var live=players.Where(x=>x.ClientId>=0&&!x.IsLocal).GroupBy(x=>x.ClientId).Select(g=>g.OrderByDescending(x=>!string.IsNullOrWhiteSpace(x.FriendCode)).ThenByDescending(x=>!string.IsNullOrWhiteSpace(x.Name)).First()).Take(50).ToArray();')\n\
+        \    s=one(s,'if(joined.ClientId>=0&&!joined.IsLocal&&!string.IsNullOrWhiteSpace(joined.FriendCode))roster.Add(joined);','if(joined.ClientId>=0&&!joined.IsLocal)roster.Add(joined);')\n\
+        \    return s\nedit(root/'RecentPlayerHistory.cs',history)\n# Do not discard valid network client IDs solely because\
+        \ they exceed an arbitrary threshold.\np=root/'GameBridge.cs'\nif p.exists():\n    s=p.read_text();s=s.replace('item.ClientId\
+        \ < 0 || item.ClientId > 2000000','item.ClientId < 0').replace('id < 0 || id > 2000000','id < 0');p.write_text(s)\n\
+        # Name on exit: separate opt-in, only use a writable local profile Name property.\ndef session(s):\n    s=one(s,'private\
+        \ static string _requestedName=\"\";','private static string _requestedName=\"\";\\n    private static bool _exitNamePending;')\n\
+        \    s=one(s,'ActiveGame=0;ActiveCode=\"\";_nameDone=true;_requestedName=\"\";_nameAttempts=0;','ActiveGame=0;ActiveCode=\"\
+        \";_nameDone=true;_requestedName=\"\";_nameAttempts=0;\\n        if(reason!=\"switched-lobby\")_exitNamePending=true;')\n\
+        \    s=one(s,'int liveRoom=GameBridge.SessionRoom;','int liveRoom=GameBridge.SessionRoom;\\n        if(_exitNamePending&&!GameBridge.IsConnectedSession()){_exitNamePending=false;TryLocalExitName();}')\n\
+        \    marker='    internal static void Tick()'\n    s=one(s,marker,'''    private static void TryLocalExitName(){\n\
+        \        try{\n            using var doc=JsonDocument.Parse(File.ReadAllText(At(\"LobbyGuardian-spoof-options.json\"\
+        )));\n            if(!doc.RootElement.TryGetProperty(\"RandomizeNameOnLeave\",out var flag)||flag.ValueKind!=JsonValueKind.True)return;\n\
+        \            var dm=AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(\"DataManager\",false)).FirstOrDefault(t=>t!=null);\n\
+        \            var customization=Get(Get(dm,\"Player\"),\"Customization\");\n            if(customization==null){Status(\"\
+        exit-name-unavailable\",\"Local profile customization API unavailable\");return;}\n            var prop=customization.GetType().GetProperty(\"\
+        Name\",F);\n            if(prop==null||!prop.CanWrite||prop.PropertyType!=typeof(string)){Status(\"exit-name-unavailable\"\
+        ,\"Writable local profile Name property unavailable\");return;}\n            string name=\"Player\"+Random.Shared.Next(1000,10000);\n\
+        \            prop.SetValue(customization,name);\n            Status(string.Equals(prop.GetValue(customization)?.ToString(),name,StringComparison.Ordinal)?\"\
+        exit-name-confirmed\":\"exit-name-unconfirmed\",\"Local profile name request: \"+name);\n        }catch(Exception\
+        \ ex){Status(\"exit-name-error\",ex.GetBaseException().GetType().Name);}\n    }\n'''+marker)\n    return s\nedit(root/'SessionExtras.cs',session)\n\
+        # UI: explicit state, synchronise settings to existing config directories, no new duplicate controls.\np=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')\n\
+        def ui(s):\n    s=one(s,'Runnable refresh=()->b.setText((enabled(a,UTILITY,key,false)?\"Turn off auto-ban \":\"Turn\
+        \ on auto-ban \")+name);','Runnable refresh=()->b.setText(\"Auto-ban \"+name+\": \"+(enabled(a,UTILITY,key,false)?\"\
+        ON — tap to turn OFF\":\"OFF — tap to turn ON\"));')\n    s=one(s,'b.setOnClickListener(v->{set(a,UTILITY,key,!enabled(a,UTILITY,key,false));refresh.run();});','b.setOnClickListener(v->{set(a,UTILITY,key,!enabled(a,UTILITY,key,false));refresh.run();});')\
+        \ if False else s\n    s=one(s,'JSONObject obj=json(f);obj.put(key,flag);','JSONObject obj=json(f);obj.put(key,flag);\\\
+        n            if(file.equals(UTILITY)&&(key.equals(\"AutoBanSuspectedBots\")||key.equals(\"AutoBanHackers\"))&&!obj.optBoolean(\"\
+        AutoBanSuspectedBots\",false)&&!obj.optBoolean(\"AutoBanHackers\",false)){obj.put(\"ExperimentalAutomaticModeration\"\
+        ,false);}')\n    s=one(s,'if(!tmp.renameTo(f))throw new java.io.IOException(\"Setting not saved\");','''if(!tmp.renameTo(f))throw\
+        \ new java.io.IOException(\"Setting not saved\");\n            if(file.equals(UTILITY)||file.equals(SPOOF)){\n   \
+        \             File files=a.getFilesDir(),parFiles=files.getParentFile(),external=a.getExternalFilesDir(null);\n  \
+        \              File[] dirs=new File[]{new File(files,\"BepInEx/config\"),new File(files,\"BepInEx/config/config\"\
+        ),new File(parFiles,\"BepInEx/config\"),new File(files,\"config\"),new File(files,\"BepInEx\"),new File(parFiles,\"\
+        BepInEx\"),external==null?files:new File(external,\"BepInEx/config\")};\n                for(File dir:dirs){File other=new\
+        \ File(dir,file);if(!dir.isDirectory()||other.getCanonicalFile().equals(f.getCanonicalFile())||(!other.isFile()&&!new\
+        \ File(dir,\"LobbyGuardian-client-status.json\").isFile()&&!new File(dir,\"LobbyGuardian-room-controls-live.json\"\
+        ).isFile()))continue;\n                    try{JSONObject copy=json(other);copy.put(key,flag);if(file.equals(UTILITY)&&(key.equals(\"\
+        AutoBanSuspectedBots\")||key.equals(\"AutoBanHackers\"))&&!copy.optBoolean(\"AutoBanSuspectedBots\",false)&&!copy.optBoolean(\"\
+        AutoBanHackers\",false))copy.put(\"ExperimentalAutomaticModeration\",false);\n                        File temp=new\
+        \ File(other.getPath()+\".settings.tmp\");try(FileOutputStream out=new FileOutputStream(temp,false)){out.write(copy.toString().getBytes(StandardCharsets.UTF_8));}if(!temp.renameTo(other))throw\
+        \ new java.io.IOException(\"Secondary setting not saved\");\n                    }catch(Exception ignored){}\n   \
+        \             }\n            }''')\n    s=one(s,'check(a,p,\"Randomize my name on every join\",\"Game may reject the\
+        \ requested display-name change\",SPOOF,\"RandomizeNameOnJoin\",false);','check(a,p,\"Randomize my name on every join\"\
+        ,\"Game may reject the requested display-name change\",SPOOF,\"RandomizeNameOnJoin\",false);\\n        check(a,p,\"\
+        Randomize my name on leave\",\"Changes only your local display-name profile if supported\",SPOOF,\"RandomizeNameOnLeave\"\
+        ,false);')\n    # Include ordinary roster data even if the history has rows without codes.\n    s=one(s,'if(best!=null&&best.length()>0)return\
+        \ best;','JSONArray merged=best==null?new JSONArray():best;')\n    s=one(s,'if(fallback.length()>0)return fallback;','for(int\
+        \ j=0;j<fallback.length();j++)merged.put(fallback.optJSONObject(j));')\n    s=one(s,'        return best;\\n    }\\\
+        n    private static boolean digitBeforeHash','        return merged;\\n    }\\n    private static boolean digitBeforeHash')\n\
+        \    s=one(s,'JSONArray result=new JSONArray();\\n        int missing=0;','JSONArray result=new JSONArray();\\n  \
+        \      java.util.HashSet<String> seenCodes=new java.util.HashSet<>();\\n        int missing=0;')\n    s=one(s,'if(numberedOnly&&!digitBeforeHash(code))continue;','if(numberedOnly&&!digitBeforeHash(code))continue;\\\
+        n            if(!code.isEmpty()&&!seenCodes.add(code.toLowerCase(java.util.Locale.ROOT)))continue;')\n    return s\n\
+        edit(p,ui)\nprint('Live setting checks, local profile exit candidate and history merging installed')\nPY_4364\n"
+    - name: Add independent suspected hacker alerts
+      shell: bash
+      run: "python3 - <<'PY_ALERT'\nfrom pathlib import Path\nimport re\nroot=Path('LobbyGuardian/Plugin')\np=root/'BauStyleAntiCheat.cs';s=p.read_text()\n\
+        # Notify on an existing detector finding, before any auto-ban decision.\nanchor=re.search(r'Finding\\?\\s+finding\\\
+        s*=\\s*Inspect\\([^;]*\\);',s)\nassert anchor, 'Anti-cheat finding anchor not found'\nsig=re.search(r'\\bBeforeRpc\\\
+        s*\\(\\s*object\\??\\s+(\\w+)\\s*,',s)\nassert sig, 'RPC callback argument not found'\ninstance=sig.group(1)\ns=s[:anchor.end()]+\"\
+        \\n            if(finding!=null) GuardianHackerAlerts.Observe(\"+instance+\",rpc,finding);\"+s[anchor.end():]\np.write_text(s)\n\
+        (root/'GuardianHackerAlerts.cs').write_text('''using System;\nusing System.Collections.Generic;\nusing System.IO;\n\
+        using System.Linq;\nusing System.Reflection;\nusing System.Text.Json;\nusing BepInEx;\nnamespace LobbyGuardian;\n\
+        internal static class GuardianHackerAlerts {\n    private static readonly Dictionary<string,DateTimeOffset> Seen=new();\n\
+        \    private static int Room;\n    private const BindingFlags F=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance;\n\
+        \    private static object? Read(object? o,string key){\n        if(o==null)return null;\n        try{return o.GetType().GetProperty(key,F)?.GetValue(o)??o.GetType().GetField(key,F)?.GetValue(o);}catch{return\
+        \ null;}\n    }\n    internal static void Observe(object? instance,object? rpc,object? finding){\n        try{\n \
+        \           if(!GameBridge.IsHost()||!GameBridge.IsConnectedSession())return;\n            string file=Path.Combine(Paths.ConfigPath,\"\
+        LobbyGuardian-utility-options.json\");\n            if(File.Exists(file)){\n                using var d=JsonDocument.Parse(File.ReadAllText(file));\n\
+        \                if(d.RootElement.TryGetProperty(\"HackerAlerts\",out var flag)&&flag.ValueKind==JsonValueKind.False)return;\n\
+        \            }\n            int room=GameBridge.SessionRoom;\n            if(room!=Room){Room=room;Seen.Clear();}\n\
+        \            string reason=Read(finding,\"Reason\")?.ToString()??rpc?.ToString()??\"Unexpected game action\";\n  \
+        \          if(reason.Length>140)reason=reason.Substring(0,140);\n            bool knownOwner=int.TryParse((Read(instance,\"\
+        OwnerId\")??Read(instance,\"ownerId\"))?.ToString(),out int owner);\n            string who=\"Unknown sender\";\n\
+        \            if(knownOwner){\n                var matches=GameBridge.ReadConnectedPlayers().Where(x=>x.ClientId==owner&&!x.IsLocal).Take(2).ToArray();\n\
+        \                if(matches.Length==1&&!string.IsNullOrWhiteSpace(matches[0].Name))who=\"Possible player: \"+matches[0].Name;\n\
+        \            }\n            var now=DateTimeOffset.UtcNow;\n            string key=who+\"|\"+reason;\n           \
+        \ if(Seen.TryGetValue(key,out var last)&&now-last<TimeSpan.FromSeconds(15))return;\n            if(Seen.Count>=128)Seen.Clear();\n\
+        \            Seen[key]=now;\n            HostExtras.Warn(\"Suspected hacker activity — \"+who+\" — \"+reason+\" (sender\
+        \ unverified)\",\"hacker-alert\");\n        }catch{}\n    }\n}\n''')\np=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java');s=p.read_text()\n\
+        anchor='protectionToggle(a,p,\"hackers\",\"AutoBanHackers\");'\nassert s.count(anchor)==1\ns=s.replace(anchor,anchor+'\\\
+        n        check(a,p,\"Hacker detection alerts\",\"Show suspected cheating warnings even when auto-ban is OFF\",UTILITY,\"\
+        HackerAlerts\",true);',1)\np.write_text(s)\nprint('Independent hacker detection alert and toggle installed')\nPY_ALERT\n"
+    - name: Centralize live auto-ban safety and enforce shared two-attempt cap
+      shell: bash
+      run: "cat > /tmp/lg4366.patch <<'LG_PATCH'\n--- /dev/null\n+++ b/LobbyGuardian/Plugin/AutoBanPolicy.cs\n@@ -0,0 +1,26\
+        \ @@\n+using System;\n+namespace LobbyGuardian;\n+internal static class AutoBanPolicy\n+{\n+    internal const int\
+        \ NumberedLimit=2;\n+    internal static bool Numbered(string? code)\n+    {\n+        if(string.IsNullOrWhiteSpace(code))return\
+        \ false;\n+        code=code.Trim();int sep=code.IndexOf('#');\n+        if(sep<=0||sep!=code.LastIndexOf('#')||sep==code.Length-1)return\
+        \ false;\n+        bool digit=false;\n+        for(int i=0;i<sep;i++)if(code[i]>='0'&&code[i]<='9')digit=true;\n+\
+        \        for(int i=sep+1;i<code.Length;i++)if(code[i]<'0'||code[i]>'9')return false;\n+        return digit;\n+  \
+        \  }\n+    // One decision for every automatic removal, irrespective of detector label.\n+    internal static bool\
+        \ Permits(bool manual,bool ban,bool botRule,bool hackerRule,bool numbered,bool suspectedBot,bool codeKnown,bool botOn,bool\
+        \ hackerOn,int numberedAttempts)\n+    {\n+        if(manual)return true;\n+        if(ban&&!codeKnown)return false;\
+        \ // cannot enforce numbered cap without a code\n+        if(ban&&numbered&&numberedAttempts>=NumberedLimit)return\
+        \ false;\n+        if((botRule||numbered||suspectedBot)&&!botOn)return false;\n+        if(hackerRule&&!hackerOn)return\
+        \ false;\n+        return botRule||hackerRule; // reject any unclassified automatic request\n+    }\n+}\n--- a/LobbyGuardian/Plugin/HostModerationQueue.cs\n\
+        +++ b/LobbyGuardian/Plugin/HostModerationQueue.cs\n@@ -8,13 +8,13 @@\n namespace LobbyGuardian;\n internal static\
+        \ class HostModerationQueue\n {\n-    sealed class Request { public PlayerIdentity Player=new(); public bool Ban;\
+        \ public bool Placeholder; public bool DigitRule; public bool BotRule; public bool HackerRule; public long Handle;\
+        \ public DateTimeOffset At; }\n+    sealed class Request { public PlayerIdentity Player=new(); public bool Ban; public\
+        \ bool Placeholder; public bool DigitRule; public bool BotRule; public bool HackerRule; public bool Manual; public\
+        \ long Handle; public DateTimeOffset At; }\n     static readonly Dictionary<int,Request> Pending=new();\n     static\
+        \ readonly Dictionary<int,DateTimeOffset> Sent=new();\n     static readonly object Gate=new();\n     static DateTimeOffset\
+        \ nextSend,nextStatus,quietUntil;\n     static int room,queued,duplicates,dispatched,skipped,errors,confirmed;\n-\
+        \    const int DigitLimit=2; static int digitRoom, digitAttempts; static bool digitEnabled;\n+    const int DigitLimit=AutoBanPolicy.NumberedLimit;\
+        \ static int digitRoom, digitAttempts; static bool digitEnabled;\n     static int awaiting=-1, absentSamples; static\
+        \ DateTimeOffset sentAt, nextCheck; static bool halted;\n     static string last=\"No moderation requests yet\";\n\
+        \     static object? Get(object? o,string n){if(o==null)return null;for(Type? t=o is Type typ?typ:o.GetType();t!=null;t=t.BaseType){try{var\
+        \ f=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static|BindingFlags.DeclaredOnly;var\
+        \ v=t.GetProperty(n,f)?.GetValue(o is Type?null:o)??t.GetField(n,f)?.GetValue(o is Type?null:o);if(v!=null)return\
+        \ v;}catch{}}return null;}\n@@ -25,14 +25,23 @@\n     static bool Same(PlayerIdentity a,PlayerIdentity b){if(!Stable(a)||!Stable(b))return\
+        \ false;if(!string.IsNullOrWhiteSpace(a.Puid)&&!string.IsNullOrWhiteSpace(b.Puid)&&!Match(a.Puid,b.Puid))return false;if(!string.IsNullOrWhiteSpace(a.FriendCode)&&!string.IsNullOrWhiteSpace(b.FriendCode)&&!Match(a.FriendCode,b.FriendCode))return\
+        \ false;return Match(a.Puid,b.Puid)||Match(a.FriendCode,b.FriendCode);}\n     static bool Allowed(PlayerIdentity p){try{var\
+        \ r=RuleStore.LoadOrCreate(Path.Combine(Paths.ConfigPath,\"LobbyGuardian-rules.json\"));return r.AllowFriendCodes.Any(x=>Match(x,p.FriendCode))||r.AllowPuids.Any(x=>Match(x,p.Puid))||r.AllowNamesExact.Any(x=>Match(x,p.Name));}catch{return\
+        \ true;}}\n     static bool Sync(){var c=GameBridge.Client;int id=Num(Get(c,\"GameId\"));int self=Num(Get(c,\"ClientId\"\
+        )),host=Num(Get(c,\"HostId\"));bool ready=GameBridge.IsHost()&&id!=0&&id!=-1&&self>=0&&self==host; if(!ready||id!=room){Pending.Clear();Sent.Clear();awaiting=-1;absentSamples=0;halted=false;room=ready?id:0;}if(ready&&id!=digitRoom){digitRoom=id;digitAttempts=0;}return\
+        \ ready;}\n-    static DateTimeOffset nextSetting,nextTick; static bool autoEnabled,botEnabled,hackerEnabled;\n- \
+        \   internal static bool AutomaticEnabled(){var now=DateTimeOffset.UtcNow;nextSetting=now;try{using var d=JsonDocument.Parse(File.ReadAllText(Path.Combine(Paths.ConfigPath,\"\
+        LobbyGuardian-utility-options.json\")));autoEnabled=d.RootElement.TryGetProperty(\"ExperimentalAutomaticModeration\"\
+        ,out var v)&&v.ValueKind==JsonValueKind.True;botEnabled=d.RootElement.TryGetProperty(\"AutoBanSuspectedBots\",out\
+        \ var bots)&&bots.ValueKind==JsonValueKind.True;digitEnabled=botEnabled;hackerEnabled=d.RootElement.TryGetProperty(\"\
+        AutoBanHackers\",out var hackers)&&hackers.ValueKind==JsonValueKind.True;}catch{autoEnabled=false;digitEnabled=false;botEnabled=false;hackerEnabled=false;}return\
+        \ autoEnabled&&(botEnabled||hackerEnabled);}\n-    internal static bool BotAutoBanEnabled(){lock(Gate){AutomaticEnabled();return\
+        \ botEnabled;}}\n-    internal static bool HackerAutoBanEnabled(){lock(Gate){AutomaticEnabled();return hackerEnabled;}}\n\
+        +    static DateTimeOffset nextTick; static bool botEnabled,hackerEnabled;\n+    // Dedicated switches cannot be overwritten\
+        \ by unrelated utility JSON writers.\n+    static bool ReadSwitch(string key){try{return File.ReadAllText(Path.Combine(Paths.ConfigPath,\"\
+        LobbyGuardian-\"+key+\".switch\")).Trim()==\"ON\";}catch{return false;}}\n+    static void ReadSwitches(){botEnabled=ReadSwitch(\"\
+        AutoBanSuspectedBots\");hackerEnabled=ReadSwitch(\"AutoBanHackers\");digitEnabled=botEnabled;}\n+    internal static\
+        \ bool BotAutoBanEnabled(){lock(Gate){ReadSwitches();return botEnabled;}}\n+    internal static bool HackerAutoBanEnabled(){lock(Gate){ReadSwitches();return\
+        \ hackerEnabled;}}\n+    static bool Permitted(Request req,PlayerIdentity current){\n+        ReadSwitches();\n+ \
+        \       bool numbered=DigitCode(req.Player.FriendCode)||DigitCode(current.FriendCode);\n+        bool suspected=numbered||ConnectionBotGuard.IsSuspectedBot(current);\n\
+        +        return AutoBanPolicy.Permits(req.Manual||req.Handle!=0,req.Ban,req.BotRule,req.HackerRule,numbered,suspected,!string.IsNullOrWhiteSpace(current.FriendCode),botEnabled,hackerEnabled,digitAttempts);\n\
+        +    }\n+    internal static bool EnqueueManual(PlayerIdentity p,bool ban)=>Enqueue(p,ban,manual:true);\n     internal\
+        \ static bool EnqueueHackerAction(PlayerIdentity p,bool ban)=>Enqueue(p,ban,false,false,false,true);\n     internal\
+        \ static bool EnqueueBotAction(PlayerIdentity p,bool ban)=>Enqueue(p,ban,false,false,true);\n-    internal static\
+        \ bool DigitRuleAvailable(){lock(Gate){AutomaticEnabled();return digitEnabled&&GameBridge.IsHost()&&GameBridge.IsPregameLobby()&&(GameBridge.SessionRoom!=digitRoom||digitAttempts<DigitLimit);}}\n\
+        -    static bool DigitCode(string code){int i=code.IndexOf('#');return i>0&&i==code.LastIndexOf('#')&&i<code.Length-1&&code.Substring(i+1).All(c=>c>='0'&&c<='9')&&code.Substring(0,i).Any(c=>c>='0'&&c<='9');}\n\
+        +    internal static bool DigitRuleAvailable(){lock(Gate){ReadSwitches();return digitEnabled&&GameBridge.IsHost()&&GameBridge.IsPregameLobby()&&(GameBridge.SessionRoom!=digitRoom||digitAttempts<DigitLimit);}}\n\
+        +    static bool DigitCode(string code)=>AutoBanPolicy.Numbered(code);\n     internal static bool EnqueueDigitBan(PlayerIdentity\
+        \ p)=>Enqueue(p,true,false,true,true);\n     internal static bool EnqueuePlaceholder(PlayerIdentity p)=>Enqueue(p,true,true,false,true);\n\
+        \     internal static bool QueueUnknownKick(PlayerIdentity p,long handle){lock(Gate){try{\n@@ -41,15 +50,27 @@\n \
+        \        Pending[p.ClientId]=new Request{Player=p,Ban=false,Placeholder=true,Handle=handle,At=now};queued++;last=\"\
+        One manually approved unknown-connection kick queued\";return true;\n     }catch{return false;}}}\n \n-    internal\
+        \ static bool Enqueue(PlayerIdentity p,bool ban,bool placeholder=false,bool digitRule=false,bool botRule=false,bool\
+        \ hackerRule=false){lock(Gate){try{if(!Sync()||(botRule&&!BotAutoBanEnabled())||(hackerRule&&!HackerAutoBanEnabled())||!(digitRule?DigitRuleAvailable():botRule?BotAutoBanEnabled():hackerRule?HackerAutoBanEnabled():AutomaticEnabled())||(digitRule&&!DigitCode(p.FriendCode))||halted||p.ClientId<0||p.IsLocal||p.IsHost||p.ClientId==Num(Get(GameBridge.Client,\"\
+        ClientId\"))||!Stable(p)||Allowed(p))return false;var now=DateTimeOffset.UtcNow;if(Sent.TryGetValue(p.ClientId,out\
+        \ var sent)&&now-sent<TimeSpan.FromSeconds(12)){duplicates++;return true;}if(Pending.TryGetValue(p.ClientId,out var\
+        \ existing)){if(!Same(existing.Player,p)||existing.DigitRule!=digitRule||existing.BotRule!=botRule||existing.HackerRule!=hackerRule)return\
+        \ false;existing.Ban|=ban;duplicates++;return true;}if(digitRule&&digitAttempts+Pending.Values.Count(x=>x.DigitRule)>=DigitLimit)return\
+        \ false;if(Pending.Count>=24)return false;Pending[p.ClientId]=new Request{Player=p,Ban=ban,Placeholder=placeholder,DigitRule=digitRule,BotRule=botRule,HackerRule=hackerRule,At=now};queued++;quietUntil=now.AddSeconds(3);last=\"\
+        Moderation queued; waiting for a safe game update\";return true;}catch{return false;}}}\n+    internal static bool\
+        \ Enqueue(PlayerIdentity p,bool ban,bool placeholder=false,bool digitRule=false,bool botRule=false,bool hackerRule=false,bool\
+        \ manual=false){lock(Gate){try{if(!Sync()||(digitRule&&!DigitCode(p.FriendCode))||halted||p.ClientId<0||p.IsLocal||p.IsHost||p.ClientId==Num(Get(GameBridge.Client,\"\
+        ClientId\"))||!Stable(p)||Allowed(p))return false;var request=new Request{Player=p,Ban=ban,Placeholder=placeholder,DigitRule=digitRule,BotRule=botRule,HackerRule=hackerRule,Manual=manual,At=DateTimeOffset.UtcNow};if(!Permitted(request,p))return\
+        \ false;var now=request.At;if(Sent.TryGetValue(p.ClientId,out var sent)&&now-sent<TimeSpan.FromSeconds(12)){duplicates++;return\
+        \ true;}if(Pending.TryGetValue(p.ClientId,out var existing)){if(!Same(existing.Player,p)||existing.DigitRule!=digitRule||existing.BotRule!=botRule||existing.HackerRule!=hackerRule||existing.Manual!=manual)return\
+        \ false;existing.Ban|=ban;duplicates++;return true;}if(!manual&&ban&&DigitCode(p.FriendCode)&&digitAttempts+Pending.Values.Count(x=>!x.Manual&&x.Ban&&DigitCode(x.Player.FriendCode))>=DigitLimit)return\
+        \ false;if(Pending.Count>=24)return false;Pending[p.ClientId]=request;queued++;quietUntil=now.AddSeconds(3);last=\"\
+        Moderation queued; waiting for a safe game update\";return true;}catch{return false;}}}\n     internal static bool\
+        \ PauseUi(){lock(Gate)return Pending.Count>0||awaiting>=0||DateTimeOffset.UtcNow<quietUntil;}\n     internal static\
+        \ void Disconnect(){lock(Gate){Pending.Clear();Sent.Clear();room=0;awaiting=-1;halted=false;last=\"Connection ended;\
+        \ queued requests cancelled\";Publish();}}\n-    static void Publish(){try{var pc=AppDomain.CurrentDomain.GetAssemblies().Select(x=>x.GetType(\"\
+        PlayerControl\",false)).FirstOrDefault(x=>x!=null);var local=Get(pc,\"LocalPlayer\");var hudType=AppDomain.CurrentDomain.GetAssemblies().Select(x=>x.GetType(\"\
+        HudManager\",false)).FirstOrDefault(x=>x!=null);var hud=Get(hudType,\"Instance\");var chat=Get(hud,\"Chat\")??Get(hud,\"\
+        chat\");File.WriteAllText(Path.Combine(Paths.ConfigPath,\"LobbyGuardian-moderation-safety.json\"),JsonSerializer.Serialize(new{atUtc=DateTimeOffset.UtcNow.ToString(\"\
+        O\"),queued,waiting=Pending.Count,duplicates,dispatched,skipped,errors,confirmed,digitRuleLimit=DigitLimit,digitRuleAttempts=digitAttempts,digitRulePaused=digitAttempts>=DigitLimit,digitRuleEnabled=digitEnabled,botAutoBanEnabled=botEnabled,hackerAutoBanEnabled=hackerEnabled,awaitingConfirmation=awaiting>=0,halted,detail=last,uiPaused=PauseUi(),movement=Get(local,\"\
+        CanMove\")?.ToString()??\"Unknown\",chatOpen=Get(chat,\"IsOpen\")?.ToString()??\"Unknown\"}));}catch{}}\n+    static\
+        \ void Publish(){try{var pc=AppDomain.CurrentDomain.GetAssemblies().Select(x=>x.GetType(\"PlayerControl\",false)).FirstOrDefault(x=>x!=null);var\
+        \ local=Get(pc,\"LocalPlayer\");var hudType=AppDomain.CurrentDomain.GetAssemblies().Select(x=>x.GetType(\"HudManager\"\
+        ,false)).FirstOrDefault(x=>x!=null);var hud=Get(hudType,\"Instance\");var chat=Get(hud,\"Chat\")??Get(hud,\"chat\"\
+        );File.WriteAllText(Path.Combine(Paths.ConfigPath,\"LobbyGuardian-moderation-safety.json\"),JsonSerializer.Serialize(new{atUtc=DateTimeOffset.UtcNow.ToString(\"\
+        O\"),policyVersion=\"4.3.66\",queued,waiting=Pending.Count,duplicates,dispatched,skipped,errors,confirmed,digitRuleLimit=DigitLimit,digitRuleAttempts=digitAttempts,digitRulePaused=digitAttempts>=DigitLimit,digitRuleEnabled=digitEnabled,botAutoBanEnabled=botEnabled,hackerAutoBanEnabled=hackerEnabled,awaitingConfirmation=awaiting>=0,halted,detail=last,uiPaused=PauseUi(),movement=Get(local,\"\
+        CanMove\")?.ToString()??\"Unknown\",chatOpen=Get(chat,\"IsOpen\")?.ToString()??\"Unknown\"}));}catch{}}\n     internal\
+        \ static void Tick(){Request? send=null;PlayerIdentity? target=null;int sendingRoom=0;var now=DateTimeOffset.UtcNow;if(now<nextTick)return;nextTick=now.AddMilliseconds(150);\n\
+        -      lock(Gate){try{bool ready=Sync();bool otherAuto=AutomaticEnabled();bool digitsReady=ready&&DigitRuleAvailable();foreach(var\
+        \ key in Pending.Where(x=> (x.Value.BotRule&&!botEnabled)||(x.Value.HackerRule&&!hackerEnabled)||(x.Value.DigitRule?!digitsReady:(!x.Value.BotRule&&!x.Value.HackerRule&&x.Value.Handle==0&&!otherAuto))).Select(x=>x.Key).ToArray())Pending.Remove(key);foreach(var\
+        \ id in Sent.Where(x=>now-x.Value>TimeSpan.FromSeconds(12)).Select(x=>x.Key).ToArray())Sent.Remove(id);if(ready&&awaiting>=0&&now>=nextCheck){nextCheck=now.AddMilliseconds(500);var\
+        \ roster=GameBridge.ReadConnectedPlayers().ToArray();bool hasSelf=roster.Any(p=>p.IsLocal);if(hasSelf&&!roster.Any(p=>p.ClientId==awaiting))absentSamples++;else\
+        \ absentSamples=0;if(absentSamples>=2){confirmed++;awaiting=-1;nextSend=now.AddSeconds(4);last=\"Player departure\
+        \ observed; cooling down before next action\";}else if(now-sentAt>=TimeSpan.FromSeconds(10)){halted=true;Pending.Clear();awaiting=-1;last=\"\
+        Automatic moderation paused: previous removal not confirmed\";HostExtras.Warn(last,\"moderation-safety\");}}\n-  \
+        \    if(ready&&!halted&&awaiting<0&&now>=nextSend&&Pending.Count>0){var item=Pending.OrderBy(x=>x.Value.At).First();var\
+        \ req=item.Value;if(now-req.At>=TimeSpan.FromSeconds(1)){Pending.Remove(item.Key);var matches=GameBridge.ReadConnectedPlayers().Where(p=>p.ClientId==item.Key&&!p.IsLocal&&!p.IsHost).Take(2).ToArray();bool\
+        \ valid=matches.Length==1&&!Allowed(matches[0]);if(valid){var m=matches[0];valid=req.Handle!=0?(!Loaded(m)&&GameBridge.ConnectionHandle(item.Key)==req.Handle&&GameBridge.IsPregameLobby()):Same(req.Player,m)&&(req.Placeholder?(!Loaded(m)):(Loaded(m)&&GameBridge.HasLoadedCharacter(item.Key)));}if(valid&&req.DigitRule)valid=digitsReady&&digitAttempts<DigitLimit&&DigitCode(matches[0].FriendCode);if(!valid||now-req.At>TimeSpan.FromSeconds(20)){skipped++;last=\"\
+        Request cancelled: identity not verified or player left\";}else{if(req.DigitRule){digitAttempts++;if(digitAttempts>=DigitLimit){foreach(var\
+        \ key in Pending.Where(x=>x.Value.DigitRule).Select(x=>x.Key).ToArray())Pending.Remove(key);}}send=req;target=matches[0];sendingRoom=room;awaiting=item.Key;absentSamples=0;sentAt=now;nextCheck=now.AddSeconds(1);quietUntil=now.AddSeconds(5);Sent[item.Key]=now;}}}\n\
+        +      lock(Gate){try{bool ready=Sync();ReadSwitches();foreach(var key in Pending.Where(x=>!Permitted(x.Value,x.Value.Player)).Select(x=>x.Key).ToArray()){Pending.Remove(key);skipped++;last=\"\
+        Cancelled by live moderation policy\";}foreach(var id in Sent.Where(x=>now-x.Value>TimeSpan.FromSeconds(12)).Select(x=>x.Key).ToArray())Sent.Remove(id);if(ready&&awaiting>=0&&now>=nextCheck){nextCheck=now.AddMilliseconds(500);var\
+        \ roster=GameBridge.ReadConnectedPlayers().ToArray();bool hasSelf=roster.Any(p=>p.IsLocal);if(hasSelf&&!roster.Any(p=>p.ClientId==awaiting))absentSamples++;else\
+        \ absentSamples=0;if(absentSamples>=2){confirmed++;awaiting=-1;nextSend=now.AddSeconds(4);last=\"Player departure\
+        \ observed; cooling down before next action\";}else if(now-sentAt>=TimeSpan.FromSeconds(10)){halted=true;Pending.Clear();awaiting=-1;last=\"\
+        Automatic moderation paused: previous removal not confirmed\";HostExtras.Warn(last,\"moderation-safety\");}}\n+  \
+        \    if(ready&&!halted&&awaiting<0&&now>=nextSend&&Pending.Count>0){var item=Pending.OrderBy(x=>x.Value.At).First();var\
+        \ req=item.Value;if(now-req.At>=TimeSpan.FromSeconds(1)){Pending.Remove(item.Key);var matches=GameBridge.ReadConnectedPlayers().Where(p=>p.ClientId==item.Key&&!p.IsLocal&&!p.IsHost).Take(2).ToArray();bool\
+        \ valid=matches.Length==1&&!Allowed(matches[0]);if(valid){var m=matches[0];valid=req.Handle!=0?(!Loaded(m)&&GameBridge.ConnectionHandle(item.Key)==req.Handle&&GameBridge.IsPregameLobby()):Same(req.Player,m)&&(req.Placeholder?(!Loaded(m)):(Loaded(m)&&GameBridge.HasLoadedCharacter(item.Key)));}if(valid)valid=Permitted(req,matches[0])&&(!req.DigitRule||DigitCode(matches[0].FriendCode));if(!valid||now-req.At>TimeSpan.FromSeconds(20)){skipped++;last=\"\
+        Request cancelled: identity not verified or player left\";}else{send=req;target=matches[0];sendingRoom=room;awaiting=item.Key;absentSamples=0;sentAt=now;nextCheck=now.AddSeconds(1);quietUntil=now.AddSeconds(5);Sent[item.Key]=now;}}}\n\
+        \       if(now>=nextStatus){nextStatus=now.AddSeconds(2);Publish();}}catch{errors++;}}\n       // The native call\
+        \ can synchronously invoke callbacks. Do not hold Gate across it.\n-      if(send!=null&&target!=null){bool permitted=send.Handle!=0||(send.BotRule?BotAutoBanEnabled():send.HackerRule?HackerAutoBanEnabled():AutomaticEnabled());\
+        \ if(!permitted){lock(Gate){awaiting=-1;Sent.Remove(target.ClientId);last=\"Cancelled: automatic moderation is OFF\"\
+        ;Publish();}return;} bool ok=GameBridge.SessionRoom==sendingRoom&&GameBridge.IsHost()&&(send.Handle==0||GameBridge.ConnectionHandle(target.ClientId)==send.Handle)&&GameBridge.DispatchModeration(target,send.Ban);lock(Gate){if(room!=sendingRoom)return;if(ok){dispatched++;last=send.DigitRule?\"\
+        Numbered Friend Code ban request \"+digitAttempts+\" / \"+DigitLimit+\" sent; \"+(digitAttempts>=DigitLimit?\"this\
+        \ rule is paused until a new lobby\":\"awaiting departure\"):\"One native host moderation request sent; awaiting departure\"\
+        ;LobbyStabilityTrace.Event(last);}else{errors++;halted=true;awaiting=-1;Pending.Clear();last=\"Moderation paused:\
+        \ native request failed\";}Publish();}}\n+      if(send!=null&&target!=null){\n+        bool counted=false;\n+   \
+        \     lock(Gate){\n+            // Refresh again immediately before native dispatch, not when the detector fired.\n\
+        +            if(!Sync()||room!=sendingRoom||!Permitted(send,target)){\n+                awaiting=-1;Sent.Remove(target.ClientId);skipped++;last=\"\
+        Cancelled by final live moderation policy\";Publish();return;\n+            }\n+            counted=!send.Manual&&send.Handle==0&&send.Ban&&(DigitCode(send.Player.FriendCode)||DigitCode(target.FriendCode));\n\
+        +            if(counted){digitAttempts++;if(digitAttempts>=DigitLimit){foreach(var key in Pending.Where(x=>!x.Value.Manual&&x.Value.Ban&&DigitCode(x.Value.Player.FriendCode)).Select(x=>x.Key).ToArray())Pending.Remove(key);}}\n\
+        +        }\n+        bool ok=GameBridge.SessionRoom==sendingRoom&&GameBridge.IsHost()&&(send.Handle==0||GameBridge.ConnectionHandle(target.ClientId)==send.Handle)&&GameBridge.DispatchModeration(target,send.Ban);\n\
+        +        lock(Gate){if(room!=sendingRoom)return;if(ok){dispatched++;last=counted?\"Numbered Friend Code ban attempt\
+        \ \"+digitAttempts+\" / \"+DigitLimit+\"; \"+(digitAttempts>=DigitLimit?\"all numbered automatic bans paused until\
+        \ a different lobby\":\"awaiting departure\"):\"One native host moderation request sent; awaiting departure\";LobbyStabilityTrace.Event(last);}else{errors++;halted=true;awaiting=-1;Pending.Clear();last=\"\
+        Moderation paused: native request failed\";}Publish();}\n+      }\n     }\n }\n--- a/LobbyGuardian/Plugin/GameBridge.cs\n\
+        +++ b/LobbyGuardian/Plugin/GameBridge.cs\n@@ -189,8 +189,8 @@\n         }catch{}\n         return false;\n     }\n\
+        -    public static bool Ban(PlayerIdentity p) => HostModerationQueue.Enqueue(p,true);\n-    public static bool Kick(PlayerIdentity\
+        \ p) => HostModerationQueue.Enqueue(p,false);\n+    public static bool Ban(PlayerIdentity p) => HostModerationQueue.EnqueueManual(p,true);\n\
+        +    public static bool Kick(PlayerIdentity p) => HostModerationQueue.EnqueueManual(p,false);\n     internal static\
+        \ bool DispatchModeration(PlayerIdentity p,bool ban)\n     {\n         if(p.ClientId<0||p.IsLocal||p.IsHost||!IsHost())return\
+        \ false;\n--- a/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\n+++ b/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\n@@\
+        \ -485,7 +485,8 @@\n         if (decision.Action != ModerationAction.Ban && decision.Action != ModerationAction.Kick)\
+        \ return;\n         if (!_banThrottle.CanSend(player.ClientId, DateTimeOffset.UtcNow)) return;\n         bool isBan\
+        \ = decision.Action == ModerationAction.Ban;\n-        bool dispatched = isBan ? GameBridge.Ban(player) : GameBridge.Kick(player);\n\
+        +        // Unclassified join rules must never bypass the bot observation switch.\n+        bool dispatched = HostModerationQueue.EnqueueBotAction(player,isBan);\n\
+        \         if (!dispatched) _banThrottle.Forget(player.ClientId);\n         HostExtras.ModerationNotice(isBan ? \"\
+        ban\" : \"kick\", player, decision.Reason, dispatched);\n         _events?.Write(\"player-joined\",\n--- a/LobbyGuardian/Plugin/ConnectionBotGuard.cs\n\
+        +++ b/LobbyGuardian/Plugin/ConnectionBotGuard.cs\n@@ -68,7 +68,15 @@\n     static long Ms(int n)=>Math.Max(1,n*Stopwatch.Frequency/1000);\n\
+        \     static object? Read(object? o,string key){if(o==null)return null;var t=o is Type ty?ty:o.GetType();var r=o is\
+        \ Type?null:o;for(Type? w=t;w!=null;w=w.BaseType){try{var v=w.GetProperty(key,F|BindingFlags.DeclaredOnly)?.GetValue(r);if(v!=null)return\
+        \ v;}catch{}try{var v=w.GetField(key,F|BindingFlags.DeclaredOnly)?.GetValue(r);if(v!=null)return v;}catch{}}return\
+        \ null;}\n     static void Alert(string message){_last=message;long now=Now();if(now<_alertAt)return;_alertAt=now+Ms(700);HostExtras.Warn(message,\"\
+        bot-guard\");}\n-    static bool DigitCode(string code){int i=code.IndexOf('#');return i>0&&i==code.LastIndexOf('#')&&i<code.Length-1&&code.Substring(i+1).All(c=>c>='0'&&c<='9')&&code.Substring(0,i).Any(c=>c>='0'&&c<='9');}\n\
+        +    static bool DigitCode(string code)=>AutoBanPolicy.Numbered(code);\n+    internal static bool IsSuspectedBot(PlayerIdentity\
+        \ player){\n+        try{\n+            if(DigitCode(player.FriendCode))return true;\n+            if(!Active.TryGetValue(player.ClientId,out\
+        \ var a))return false;\n+            if(a.Keys.Length==0)return false;\n+            return a.MissingPuid||a.Keys.Any(k=>Identities.TryGetValue(k,out\
+        \ var ident)&&ident.Cycles.Count>=4);\n+        }catch{return true;}\n+    }\n     static string Code(Arrival a)=>a.Keys.FirstOrDefault(k=>k.StartsWith(\"\
+        f:\"))?.Substring(2)??\"\";\n     static int Num(object? o,int fallback=-1)=>int.TryParse(o?.ToString(),out int n)?n:fallback;\n\
+        \     static string Str(object? o)=>o?.ToString()?.Trim()??\"\";\n--- a/fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java\n\
+        +++ b/fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java\n@@ -45,7 +45,9 @@\n             external==null?files:new\
+        \ File(external,\"BepInEx/config\")};\n         // Prefer the *active* game-side config, where the join callback\n\
+        \         // writes its status. A stale settings file must not win this lookup.\n-        File newest=null;long recent=0;for(File\
+        \ f:paths){File live=new File(f,\"LobbyGuardian-room-controls-live.json\");if(live.isFile()&&live.lastModified()>recent){recent=live.lastModified();newest=f;}}\n\
+        +        File newest=null;long recent=0;for(File f:paths){File live=new File(f,\"LobbyGuardian-moderation-safety.json\"\
+        );if(live.isFile()&&live.lastModified()>recent){recent=live.lastModified();newest=f;}}\n+        if(newest!=null&&System.currentTimeMillis()-recent>=0&&System.currentTimeMillis()-recent<=10000)return\
+        \ newest;\n+        newest=null;recent=0;for(File f:paths){File live=new File(f,\"LobbyGuardian-room-controls-live.json\"\
+        );if(live.isFile()&&live.lastModified()>recent){recent=live.lastModified();newest=f;}}\n         if(newest!=null&&System.currentTimeMillis()-recent>=0&&System.currentTimeMillis()-recent<=15000)return\
+        \ newest;\n         newest=null;recent=0;for(File f:paths){File live=new File(f,\"LobbyGuardian-live-room.json\");if(live.isFile()&&live.lastModified()>recent){recent=live.lastModified();newest=f;}}\n\
+        \         if(newest!=null&&System.currentTimeMillis()-recent>=0&&System.currentTimeMillis()-recent<=15000)return newest;\n\
+        @@ -361,8 +363,8 @@\n         b.append(\"\\nReceive methods found: \").append(u.optInt(\"candidates\",0));\n     \
+        \    b.append(\"\\nNetwork calls actually seen: \").append(u.optLong(\"total\",0));\n         b.append(\"\\nCalls\
+        \ since mod loaded: \").append(u.optLong(\"lifetime\",0));\n-        b.append(\"\\nBot auto-ban: \").append(enabled(a,UTILITY,\"\
+        AutoBanSuspectedBots\",false)?\"ON\":\"OFF — observe only\");\n-        b.append(\"\\nHacker auto-ban: \").append(enabled(a,UTILITY,\"\
+        AutoBanHackers\",false)?\"ON\":\"OFF\");\n+        b.append(\"\\nBot auto-ban: \").append(switchOn(a,\"AutoBanSuspectedBots\"\
+        )?\"ON\":\"OFF — observe only\");\n+        b.append(\"\\nHacker auto-ban: \").append(switchOn(a,\"AutoBanHackers\"\
+        )?\"ON\":\"OFF\");\n         b.append(\"\\nListed calls seen: \").append(u.optInt(\"listed\",0));\n         b.append(\"\
+        \\nQuestion-mark players seen now: \").append(u.optInt(\"placeholders\",0));\n         b.append(\"\\nPersistent-name\
+        \ removal requests: \").append(u.optInt(\"requested\",0));\n@@ -457,12 +459,40 @@\n         dialog.show();dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{boolean\
+        \ ok=copyHistoryText(a,payload);status.setText(ok?\"Copied \"+count+\" records\":\"Clipboard unavailable; select and\
+        \ copy the text manually.\");});\n     }\n     // Remove superseded duplicate RPC widgets from the same original menu\
+        \ page.\n+    private static File switchFile(File dir,String key){return new File(dir,\"LobbyGuardian-\"+key+\".switch\"\
+        );}\n+    private static boolean switchOn(Activity a,String key){return \"ON\".equals(read(switchFile(config(a),key)).trim());}\n\
+        +    private static void saveSwitch(Activity a,String key,boolean on) throws Exception {\n+        File files=a.getFilesDir(),\
+        \ parent=files.getParentFile(), external=a.getExternalFilesDir(null), active=config(a);\n+        File[] dirs={active,new\
+        \ File(files,\"BepInEx/config\"),new File(files,\"BepInEx/config/config\"),new File(parent,\"BepInEx/config\"),new\
+        \ File(parent,\"files/BepInEx/config\"),new File(files,\"config\"),new File(files,\"BepInEx\"),new File(parent,\"\
+        BepInEx\"),external==null?files:new File(external,\"BepInEx/config\")};\n+        java.util.HashSet<String> seen=new\
+        \ java.util.HashSet<>();boolean activeSaved=false;int failures=0;\n+        for(File dir:dirs){\n+            boolean\
+        \ primary=dir.getCanonicalFile().equals(active.getCanonicalFile());\n+            if(!seen.add(dir.getCanonicalPath()))continue;\n\
+        +            if(!primary&&!dir.isDirectory())continue;\n+            try{\n+                if(!dir.isDirectory()&&!dir.mkdirs())throw\
+        \ new java.io.IOException(\"Config not writable\");\n+                File dest=switchFile(dir,key),tmp=new File(dest.getPath()+\"\
+        .tmp\");\n+                try(FileOutputStream out=new FileOutputStream(tmp,false)){out.write((on?\"ON\":\"OFF\"\
+        ).getBytes(StandardCharsets.UTF_8));out.getFD().sync();}\n+                if(!tmp.renameTo(dest))throw new java.io.IOException(\"\
+        Switch not saved\");\n+                if(primary)activeSaved=true;\n+            }catch(Exception ex){failures++;}\n\
+        +        }\n+        if(!activeSaved||failures>0)throw new java.io.IOException(\"One or more config paths could not\
+        \ be updated\");\n+    }\n     private static void protectionToggle(Activity a,LinearLayout p,String name,String key){\n\
+        -        Button b=new Button(a);b.setAllCaps(false);b.setTextColor(FG);b.setTextSize(14);\n-        b.setTag(\"guardian-clean-protection\"\
+        );\n-        Runnable refresh=()->b.setText(\"Auto-ban \"+name+\": \"+(enabled(a,UTILITY,key,false)?\"ON — tap to\
+        \ turn OFF\":\"OFF — tap to turn ON\"));\n-        refresh.run();p.addView(b,new LinearLayout.LayoutParams(-1,-2));\n\
+        -        b.setOnClickListener(v->{set(a,UTILITY,key,!enabled(a,UTILITY,key,false));refresh.run();});\n+        Button\
+        \ b=new Button(a);b.setAllCaps(false);b.setTextColor(FG);b.setTextSize(14);b.setTag(\"guardian-clean-protection\"\
+        );\n+        TextView status=new TextView(a);status.setTag(\"guardian-clean-protection\");status.setTextColor(SUB);status.setTextSize(12);\n\
+        +        String ackKey=key.equals(\"AutoBanSuspectedBots\")?\"botAutoBanEnabled\":\"hackerAutoBanEnabled\";\n+   \
+        \     Runnable refresh=()->{\n+            boolean wanted=switchOn(a,key);b.setText(\"Auto-ban \"+name+\": \"+(wanted?\"\
+        ON — tap to turn OFF\":\"OFF — tap to turn ON\"));\n+            File f=path(a,\"LobbyGuardian-moderation-safety.json\"\
+        );JSONObject live=json(f);long age=System.currentTimeMillis()-f.lastModified();\n+            boolean fresh=f.isFile()&&age>=0&&age<=10000&&\"\
+        4.3.66\".equals(live.optString(\"policyVersion\"));\n+            status.setText(fresh&&live.optBoolean(ackKey,!wanted)==wanted?\"\
+        Game confirmed: \"+(wanted?\"ON\":\"OFF — observation only\"):(fresh?\"Waiting for game to apply switch\":\"Saved\
+        \ state; game confirmation unavailable\"));\n+            if(fresh&&key.equals(\"AutoBanSuspectedBots\"))status.append(\"\
+        \\nNumbered-code automatic ban attempts: \"+live.optInt(\"digitRuleAttempts\",0)+\" / 2\"+(live.optBoolean(\"digitRulePaused\"\
+        ,false)?\" — PAUSED\":\"\"));\n+        };\n+        refresh.run();p.addView(b,new LinearLayout.LayoutParams(-1,-2));p.addView(status,new\
+        \ LinearLayout.LayoutParams(-1,-2));\n+        b.setOnClickListener(v->{try{saveSwitch(a,key,!switchOn(a,key));refresh.run();}catch(Exception\
+        \ ex){refresh.run();status.setText(\"Switch write failed on one or more paths; game state not confirmed\");}});\n\
+        +        Handler handler=new Handler(Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(!b.isAttachedToWindow())return;refresh.run();handler.postDelayed(this,1000);}},1000);\n\
+        \     }\n     private static void collapseLegacyRpcControls(android.view.ViewGroup root){\n         for(int i=0;i<root.getChildCount();i++){\n\
+        LG_PATCH\ngit apply --check /tmp/lg4366.patch\ngit apply /tmp/lg4366.patch\n"
+    - name: Switch numbered-code moderation to host kicks
+      shell: bash
+      run: "python3 - <<'PY_4367'\nfrom pathlib import Path\nroot=Path('LobbyGuardian/Plugin')\ndef edit(p,changes):\n   \
+        \ s=p.read_text()\n    for a,b in changes:\n        assert s.count(a)==1,(str(p),a[:100],s.count(a))\n        s=s.replace(a,b,1)\n\
+        \    p.write_text(s)\nedit(root/'AutoBanPolicy.cs',[\n('    // One decision','    internal static bool EffectiveBan(bool\
+        \ manual,bool requestedBan,bool numbered)=>requestedBan&&(manual||!numbered);\\n    // One decision'),\n('if(ban&&numbered&&numberedAttempts>=NumberedLimit)','if(numbered&&numberedAttempts>=NumberedLimit)'),\n\
+        ('if(ban&&!codeKnown)','if(!codeKnown)')])\nedit(root/'HostModerationQueue.cs',[\n('static DateTimeOffset nextTick;','static\
+        \ DateTimeOffset nextTick,nextSwitchRead;'),\n('static void ReadSwitches(){botEnabled=','static void ReadSwitches(bool\
+        \ force=false){var now=DateTimeOffset.UtcNow;if(!force&&now<nextSwitchRead)return;nextSwitchRead=now.AddMilliseconds(150);botEnabled='),\n\
+        ('        ReadSwitches();\\n        bool numbered','        bool numbered'),\n('EnqueueDigitBan(PlayerIdentity p)=>Enqueue(p,true','EnqueueDigitKick(PlayerIdentity\
+        \ p)=>Enqueue(p,false'),\n('var request=new Request{Player=p,Ban=ban,','ReadSwitches();ban=AutoBanPolicy.EffectiveBan(manual,ban,DigitCode(p.FriendCode));var\
+        \ request=new Request{Player=p,Ban=ban,'),\n('if(!manual&&ban&&DigitCode(p.FriendCode)&&digitAttempts+Pending.Values.Count(x=>!x.Manual&&x.Ban&&DigitCode(x.Player.FriendCode))>=DigitLimit)','if(!manual&&DigitCode(p.FriendCode)&&digitAttempts+Pending.Values.Count(x=>!x.Manual&&DigitCode(x.Player.FriendCode))>=DigitLimit)'),\n\
+        ('queued++;quietUntil=now.AddSeconds(3);','queued++;'),\n('return Pending.Count>0||awaiting>=0||DateTimeOffset.UtcNow<quietUntil;','return\
+        \ DateTimeOffset.UtcNow<quietUntil;'),\n('policyVersion=\"4.3.66\"','policyVersion=\"4.3.67\"'),\n('quietUntil=now.AddSeconds(5);','quietUntil=now.AddMilliseconds(500);'),\n\
+        ('            if(!Sync()||room!=sendingRoom||!Permitted(send,target)){','            ReadSwitches(true);\\n      \
+        \      bool numbered=DigitCode(send.Player.FriendCode)||DigitCode(target.FriendCode);\\n            send.Ban=AutoBanPolicy.EffectiveBan(send.Manual||send.Handle!=0,send.Ban,numbered);\\\
+        n            if(!Sync()||room!=sendingRoom||(!send.Manual&&send.Handle==0&&!GameBridge.IsPregameLobby())||!Permitted(send,target)){'),\n\
+        ('counted=!send.Manual&&send.Handle==0&&send.Ban&&(DigitCode(send.Player.FriendCode)||DigitCode(target.FriendCode));','counted=!send.Manual&&send.Handle==0&&numbered;'),\n\
+        ('!x.Value.Manual&&x.Value.Ban&&DigitCode(x.Value.Player.FriendCode)','!x.Value.Manual&&DigitCode(x.Value.Player.FriendCode)'),\n\
+        ('Numbered Friend Code ban attempt ','Numbered Friend Code kick attempt '),\n('all numbered automatic bans paused','all\
+        \ numbered automatic kicks paused')])\nedit(root/'ConnectionBotGuard.cs',[\n('HostModerationQueue.EnqueueDigitBan(p)','HostModerationQueue.EnqueueDigitKick(p)'),\n\
+        ('if((a.Reason==\"Digit in Friend Code prefix\"?','if((DigitCode(p.FriendCode)?'),\n('_last=a.Reason+\"; host ban\
+        \ requested\";HostExtras.ModerationNotice(\"ban\",p,a.Reason,true);','_last=a.Reason+(DigitCode(p.FriendCode)?\";\
+        \ host kick queued\":\"; host ban queued\");HostExtras.ModerationNotice(DigitCode(p.FriendCode)?\"kick\":\"ban\",p,a.Reason,true);')])\n\
+        java=Path('fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java')\nedit(java,[('\"4.3.66\".equals(live.optString(\"\
+        policyVersion\"))','\"4.3.67\".equals(live.optString(\"policyVersion\"))'),('Numbered-code automatic ban attempts:','Numbered-code\
+        \ automatic kick attempts:'),('b.setText(\"Auto-ban \"+name+\": \"+','b.setText((key.equals(\"AutoBanSuspectedBots\"\
+        )?\"Auto-moderate bots (numbered codes: kick only)\":\"Auto-ban \"+name)+\": \"+'),('Bot auto-ban: ','Bot auto-moderation:\
+        \ ')])\nPY_4367\n"
+    - name: Run moderation policy regression tests
+      shell: bash
+      run: 'mkdir -p /tmp/lg-policy-tests
+
+        cp LobbyGuardian/Plugin/AutoBanPolicy.cs /tmp/lg-policy-tests/
+
+        cat > /tmp/lg-policy-tests/PolicyTests.csproj <<''EOF''
+
+        <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup></Project>
+
+        EOF
+
+        cat > /tmp/lg-policy-tests/Program.cs <<''EOF''
+
+        using LobbyGuardian;
+
+        static void Check(bool actual,bool expected,string name){if(actual!=expected)throw new Exception(name);}
+
+        Check(AutoBanPolicy.Numbered("abc1#1234"),true,"number in prefix");
+
+        Check(AutoBanPolicy.EffectiveBan(false,true,true),false,"numbered automatic ban becomes kick");
+
+        Check(AutoBanPolicy.EffectiveBan(false,true,false),true,"other ban unchanged");
+
+        Check(AutoBanPolicy.EffectiveBan(true,true,true),true,"manual ban unchanged");
+
+        Check(AutoBanPolicy.Permits(false,false,true,false,true,true,true,true,false,0),true,"first numbered kick");
+
+        Check(AutoBanPolicy.Permits(false,false,true,false,true,true,true,true,false,2),false,"third numbered kick blocked");
+
+        Check(AutoBanPolicy.Permits(false,false,true,false,true,true,true,false,false,0),false,"bot switch off blocks numbered
+        kick");
+
+        Check(AutoBanPolicy.Numbered("abc#1234"),false,"normal numeric suffix");
+
+        Check(AutoBanPolicy.Permits(false,true,true,false,true,true,true,true,false,0),true,"first bot ban");
+
+        Check(AutoBanPolicy.Permits(false,true,true,false,true,true,true,true,false,1),true,"second bot ban");
+
+        Check(AutoBanPolicy.Permits(false,true,true,false,true,true,true,true,false,2),false,"third bot ban");
+
+        Check(AutoBanPolicy.Permits(false,true,false,true,true,true,true,true,true,2),false,"hacker label cannot bypass cap");
+
+        Check(AutoBanPolicy.Permits(false,true,true,false,false,false,true,false,true,0),false,"bots off hackers on");
+
+        Check(AutoBanPolicy.Permits(false,true,false,true,true,true,true,false,true,0),false,"numbered hacker candidate protected
+        when bots off");
+
+        Check(AutoBanPolicy.Permits(false,true,false,true,false,true,true,false,true,0),false,"suspected bot protected when
+        bots off");
+
+        Check(AutoBanPolicy.Permits(false,true,false,true,false,false,true,false,true,0),true,"independent hacker switch");
+
+        Check(AutoBanPolicy.Permits(false,true,false,true,false,false,true,true,false,0),false,"hackers off");
+
+        Check(AutoBanPolicy.Permits(false,true,false,false,false,false,true,true,true,0),false,"unclassified auto ban");
+
+        Check(AutoBanPolicy.Permits(false,true,true,false,false,false,false,true,true,0),false,"unknown code fail closed");
+
+        Check(AutoBanPolicy.Permits(true,true,false,false,true,true,true,false,false,2),true,"manual action independent");
+
+        Console.WriteLine("20 moderation policy checks passed");
+
+        EOF
+
+        dotnet run --project /tmp/lg-policy-tests/PolicyTests.csproj
+
+        '
+    - name: Build v4.3.67 Android APK
+      shell: bash
+      run: "python3 - <<'PY_BUILD'\nfrom pathlib import Path\nimport subprocess,tempfile,yaml\nold=yaml.safe_load(Path('.github/workflows/lobbyguardian-v4362-bot-observation-toggle.yml').read_text())\n\
+        step=next(x for x in old['jobs']['android']['steps'] if x.get('name')=='Build v4.3.62 Android APK')\nwith tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False)\
+        \ as f:\n    f.write(step['run']); filename=f.name\ntry: subprocess.run(['bash','-eo','pipefail',filename],check=True)\n\
+        finally: Path(filename).unlink(missing_ok=True)\nPY_BUILD"
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.67-Android-NumberedKick
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload sources
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.67-Sources-Diagnostics
+        path: 'LobbyGuardian/Plugin/*.cs
+
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+
+          '
+        if-no-files-found: error
