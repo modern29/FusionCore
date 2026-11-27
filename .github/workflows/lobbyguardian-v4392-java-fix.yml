@@ -1,0 +1,62 @@
+name: Lobby Guardian v4.3.92 - Java compile repair
+on:
+  push:
+    paths:
+      - .github/workflows/lobbyguardian-v4392-java-fix.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: gradle/actions/setup-gradle@v4
+      - run: python3 -m pip install --user PyYAML
+      - name: Rebuild with corrected Java callback
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, pathlib, subprocess, tempfile, yaml
+          source = pathlib.Path('.github/workflows/lobbyguardian-v4392-release-stability-retry.yml')
+          steps = yaml.safe_load(source.read_text())['jobs']['android']['steps']
+          run = next(s['run'] for s in steps if s.get('name') == 'Rebuild v4.3.92 with release stability changes')
+          payload = run.split("<<'LG_BUILD_B64' | gzip -d > \"$script\"\n", 1)[1].split('\nLG_BUILD_B64', 1)[0]
+          script = gzip.decompress(base64.b64decode(payload)).decode('utf8')
+          old = '(d,w)->copyPlayerDetails(activity,detail)'
+          new = '(copyDialog,copyWhich)->copyPlayerDetails(activity,detail)'
+          assert script.count(old) == 2, 'Unexpected source version'
+          script = script.replace(old, new)
+          def execute(code):
+              with tempfile.TemporaryDirectory() as folder:
+                  path = pathlib.Path(folder) / 'build.sh'
+                  path.write_text(code, encoding='utf8')
+                  subprocess.run(['bash', '-n', str(path)], check=True)
+                  subprocess.run(['bash', '-eo', 'pipefail', str(path)], check=True)
+          execute(script)
+          for title in ('Verify new command handlers in final compiled plugin', 'Verify Start result protocol in compiled plugin'):
+              execute(next(s['run'] for s in steps if s.get('name') == title))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LobbyGuardian-v4.3.92-Android-JavaFix
+          path: fusionApp/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LobbyGuardian-v4.3.92-Sources-Diagnostics
+          path: |
+            LobbyGuardian/Plugin/*.cs
+            fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java
+            fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+            fusionApp/src/main/java/dev/allofus/fusioncore/GuardianFavorites.java
+            fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianToolbox.java
+          if-no-files-found: error
