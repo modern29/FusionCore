@@ -1,0 +1,285 @@
+name: Lobby Guardian v4.3.82 - FPS and Match Transition candidate
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4382-fps-match-transition.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - name: Checkout FusionCore
+      uses: actions/checkout@v4
+    - name: Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: .NET 10
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - name: Gradle
+      uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Recreate verified v4.3.81 source stages
+      shell: bash
+      run: |
+        python3 - <<'PY_BASE_4382'
+        from pathlib import Path
+        import subprocess, tempfile, yaml
+        source=Path('.github/workflows/lobbyguardian-v4381-frame-performance-retry.yml')
+        steps=yaml.safe_load(source.read_text())['jobs']['android']['steps']
+        assert len(steps)==38 and steps[32]['name']=='Reduce repeated reflection and background diagnostic overhead'
+        assert steps[33]['name']=='Compile final patched plugin and verify embedded binary'
+        for s in steps[5:33]:
+            assert 'run' in s and ('$'+'{{') not in s['run']
+            print('>>> '+s['name'],flush=True)
+            with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False) as f:
+                f.write(s['run']);path=Path(f.name)
+            try:subprocess.run(['bash','-eo','pipefail',str(path)],check=True)
+            finally:path.unlink(missing_ok=True)
+        PY_BASE_4382
+    - name: Add FPS telemetry, reduce background polling and guard match transition
+      shell: bash
+      run: "cat > /tmp/lg4382.patch <<'LG_PATCH_4382'\n--- /dev/null\n+++ b/LobbyGuardian/Plugin/FrameHealth.cs\n@@ -0,0 +1,77\
+        \ @@\n+using System;\n+using System.Diagnostics;\n+using System.IO;\n+using System.Linq;\n+using System.Reflection;\n\
+        +using System.Text.Json;\n+using BepInEx;\n+namespace LobbyGuardian;\n+\n+// Read-only Unity frame counter and local\
+        \ input-transition diagnostics.\n+internal static class FrameHealth {\n+    private const BindingFlags F=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;\n\
+        +    private static Type? _timeType,_playerType,_introType;\n+    private static long _sampleAt,_phaseAt,_startAt;\n\
+        +    private static bool _started;\n+    private static int? _lastFrame;\n+    private static int _updates;\n+   \
+        \ private static double _totalMs,_maxMs;\n+    private static string _state=\"\";\n+    private static object? Read(object?\
+        \ o,string name){\n+        if(o==null)return null;\n+        try{return GameBridge.ReadMember(o is Type t?t:o.GetType(),o\
+        \ is Type?null:o,name,F);}catch{return null;}\n+    }\n+    private static Type? Find(string n)=>AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(n,false)).FirstOrDefault(t=>t!=null);\n\
+        +    private static void ObservePhase(long now){\n+        _state=Read(GameBridge.Client,\"GameState\")?.ToString()??\"\
+        \";\n+        bool started=string.Equals(_state,\"Started\",StringComparison.OrdinalIgnoreCase);\n+        if(started&&!_started)_startAt=now;\n\
+        +        if(!started)_startAt=0;\n+        _started=started;\n+    }\n+    internal static bool ChatUiReady(){\n+\
+        \        long now=Stopwatch.GetTimestamp();\n+        ObservePhase(now);\n+        if(!_started)return _state==\"\
+        Joined\"||_state==\"Lobby\";\n+        double age=(now-_startAt)/(double)Stopwatch.Frequency;\n+        if(age<8)return\
+        \ false;\n+        // Intro is normally destroyed after role reveal. Do not force visibility\n+        // during a\
+        \ live intro or override native movement/meeting restrictions.\n+        if(age<30){\n+            _introType??=Find(\"\
+        IntroCutscene\");\n+            var intro=Read(_introType,\"Instance\");\n+            if(Read(Read(intro,\"gameObject\"\
+        ),\"activeInHierarchy\") is bool active&&active)return false;\n+        }\n+        return true;\n+    }\n+    internal\
+        \ static long Begin(){\n+        long now=Stopwatch.GetTimestamp();\n+        try{\n+            if(now>=_phaseAt){_phaseAt=now+Stopwatch.Frequency/10;ObservePhase(now);}\n\
+        +            if(_sampleAt==0||now-_sampleAt>=Stopwatch.Frequency){\n+                _timeType??=Find(\"UnityEngine.Time\"\
+        );\n+                int? frame=Read(_timeType,\"frameCount\") is int fc?fc:null;\n+                if(_sampleAt!=0){\n\
+        +                    double seconds=(now-_sampleAt)/(double)Stopwatch.Frequency;\n+                    double? fps=frame.HasValue&&_lastFrame.HasValue&&frame.Value>=_lastFrame.Value&&seconds<=5\n\
+        +                        ?Math.Round((frame.Value-_lastFrame.Value)/seconds,1):null;\n+                    _playerType??=Find(\"\
+        PlayerControl\");\n+                    var player=Read(_playerType,\"LocalPlayer\");\n+                    bool?\
+        \ canMove=Read(player,\"CanMove\") is bool b?b:null;\n+                    string path=Path.Combine(Paths.ConfigPath,\"\
+        LobbyGuardian-frame-health.json\");\n+                    string tmp=path+\".tmp\";\n+                    File.WriteAllText(tmp,JsonSerializer.Serialize(new{fps,updateHz=Math.Round(_updates/seconds,1),\n\
+        +                        modAverageMs=_updates==0?0:Math.Round(_totalMs/_updates,2),modMaxMs=Math.Round(_maxMs,2),\n\
+        +                        state=_state,canMove,atUtcMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}));\n+      \
+        \              File.Move(tmp,path,true);\n+                }\n+                _sampleAt=now;_lastFrame=frame;_updates=0;_totalMs=0;_maxMs=0;\n\
+        +            }\n+        }catch{}\n+        return Stopwatch.GetTimestamp();\n+    }\n+    internal static void End(long\
+        \ start){\n+        double ms=(Stopwatch.GetTimestamp()-start)*1000.0/Stopwatch.Frequency;\n+        _updates++;_totalMs+=ms;_maxMs=Math.Max(_maxMs,ms);\n\
+        +    }\n+}\n--- a/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\n+++ b/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\n\
+        @@ -398,14 +398,19 @@\n         return BauStyleAntiCheat.BeforeRpc(__instance,__0);\n     }\n     private static bool\
+        \ HostVoteGuardPrefix(int __0,int __1) => LobbyRaidGuard.IncomingVotePrefix(__0,__1);\n-    private static void ClientUpdatePostfix()\
+        \ { PettingHand.TickLive(); ClientFeatures.Tick(); InboundTrafficShield.Tick(); HostResilienceShield.Tick(); BotShield.Tick();\
+        \ RpcAutoBanGuard.Tick(); ConnectionBotGuard.Tick();\n-            \n-            \n-            \n-            \n\
+        -            LobbyPresenceAlerts.Tick();\n-            RapidRaidProtection.Tick();\n-        }\n+    private static\
+        \ long _nextSafetyMaintenance,_nextConnectionMaintenance;\n+    private static void ClientUpdatePostfix() {\n+   \
+        \     long started=FrameHealth.Begin();\n+        try{\n+            PettingHand.TickLive(); ClientFeatures.Tick();\n\
+        +            // Event/RPC hooks remain unchanged. Poll-only maintenance does not need every frame.\n+            long\
+        \ now=Environment.TickCount64;\n+            if(now>=_nextSafetyMaintenance){_nextSafetyMaintenance=now+250;InboundTrafficShield.Tick();}\n\
+        +            if(now>=_nextConnectionMaintenance){_nextConnectionMaintenance=now+250;ConnectionBotGuard.Tick();}\n\
+        +            HostResilienceShield.Tick(); BotShield.Tick(); RpcAutoBanGuard.Tick();\n+            LobbyPresenceAlerts.Tick();\
+        \ RapidRaidProtection.Tick();\n+        }finally{FrameHealth.End(started);}\n+    }\n     private static void ClientGameJoinedPostfix()\
+        \ => ClientFeatures.OnGameJoined();\n     private static void ClientDisconnectedPostfix() {\n         HostResilienceShield.OnDisconnected();\n\
+        --- a/LobbyGuardian/Plugin/UtilityFull.cs\n+++ b/LobbyGuardian/Plugin/UtilityFull.cs\n@@ -36,7 +36,7 @@\n     {\n\
+        \         if(obj==null)return null;var t=obj is Type tp?tp:obj.GetType();var r=obj is Type?null:obj;\n         foreach(var\
+        \ n in names)try{\n-            var v=t.GetProperty(n,F)?.GetValue(r)??t.GetField(n,F)?.GetValue(r);\n+          \
+        \  var v=GameBridge.ReadMember(t,r,n,F);\n             if(v!=null)return v;\n         }catch{}return null;\n     }\n\
+        @@ -48,7 +48,12 @@\n         var p=obj.GetType().GetProperty(name,F);if(p?.CanWrite==true&&p.PropertyType==typeof(bool)){p.SetValue(obj,value);return\
+        \ true;}\n         var f=obj.GetType().GetField(name,F);if(f?.FieldType==typeof(bool)){f.SetValue(obj,value);return\
+        \ true;}\n     }catch{}return false;}\n-    private static Type? FindType(string name)=>AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(name,false)).FirstOrDefault(t=>t!=null);\n\
+        +    private static readonly Dictionary<string,Type> _resolvedTypes=new();\n+    private static Type? FindType(string\
+        \ name){\n+        if(_resolvedTypes.TryGetValue(name,out var cached))return cached;\n+        var found=AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(name,false)).FirstOrDefault(t=>t!=null);\n\
+        +        if(found!=null)_resolvedTypes[name]=found;return found;\n+    }\n     private static IEnumerable<object>\
+        \ All(object? c)\n     {\n         if(c==null)yield break;\n@@ -566,6 +571,7 @@\n     }\n     private static void\
+        \ AlwaysChat()\n     {\n+        if(!FrameHealth.ChatUiReady()){RestoreChatLayout();return;}\n         // Do not activate\
+        \ HUD/chat objects in the title, Online, Friends or Settings menus.\n         string state=Get(GameBridge.Client,\"\
+        GameState\")?.ToString()??\"\";\n         if(!(state.Equals(\"Started\",StringComparison.OrdinalIgnoreCase)||\n@@\
+        \ -662,12 +668,12 @@\n     {\n         var now=DateTimeOffset.UtcNow;\n         if(now<_nextHostUiHook)return;\n-\
+        \        _nextHostUiHook=now.AddMilliseconds(35);\n+        _nextHostUiHook=now.AddMilliseconds(250);\n         if(Option(\"\
+        HostStartButtonVisible\"))ShowHostStartButton();\n     }\n     internal static void OnChatSetVisible(object chat,bool\
+        \ visible)\n     {\n-        if(visible||!Option(\"AlwaysChat\"))return;\n+        if(visible||!Option(\"AlwaysChat\"\
+        )||!FrameHealth.ChatUiReady())return;\n         string state=Get(GameBridge.Client,\"GameState\")?.ToString()??\"\"\
+        ;\n         if(!(state.Equals(\"Started\",StringComparison.OrdinalIgnoreCase)||\n              state.Equals(\"Lobby\"\
+        ,StringComparison.OrdinalIgnoreCase)||\n--- a/LobbyGuardian/Plugin/ClientFeatures.cs\n+++ b/LobbyGuardian/Plugin/ClientFeatures.cs\n\
+        @@ -21,6 +21,7 @@\n     private static string _directory = \"\";\n     private static DateTimeOffset _nextTick = DateTimeOffset.MinValue;\n\
+        \     private static DateTimeOffset _nextRoster = DateTimeOffset.MinValue;\n+    private static bool _lastLobbyState;\n\
+        \     private static DateTimeOffset _reconnectAt = DateTimeOffset.MinValue;\n     private static DateTimeOffset _lastJoinedAt\
+        \ = DateTimeOffset.MinValue;\n     private static int _lastGameId;\n@@ -152,7 +153,7 @@\n     private static Type?\
+        \ _cachedLobbyBehaviourType;\n     private static bool IsLobby()\n     {\n-        if (!IsJoined()) return false;\n\
+        +        if (!string.Equals(Get(GameBridge.Client,\"GameState\")?.ToString(),\"Joined\",StringComparison.OrdinalIgnoreCase))\
+        \ return false;\n         var type = _cachedLobbyBehaviourType ??= AppDomain.CurrentDomain.GetAssemblies()\n     \
+        \        .Select(a => a.GetType(\"LobbyBehaviour\", false)).FirstOrDefault(t => t is not null);\n         return type\
+        \ is not null && Get(type, \"Instance\") is not null;\n@@ -325,12 +326,14 @@\n                 SessionExtras.ObserveStateLost();\n\
+        \             }\n             GuardianRuntimeHealth.Run(\"SessionExtras\", SessionExtras.Tick);\n-            if (now\
+        \ >= _nextRoster)\n-            {\n+            bool lobbyNow=IsLobby();\n+            if (lobbyNow!=_lastLobbyState\
+        \ || now >= _nextRoster)\n+            {\n+                _lastLobbyState=lobbyNow;\n                 _nextRoster\
+        \ = now.AddSeconds(2);\n                 WriteRoster();\n             }\n-            LocalEffects.Tick(IsLobby(),\
+        \ ReadSetting(\"LocalLobbyNoClip\"),\n+            LocalEffects.Tick(lobbyNow, ReadSetting(\"LocalLobbyNoClip\"),\n\
+        \                 ReadSetting(\"LocalLobbyInvisible\"), ReadSetting(\"LocalPetHidden\"));\n             GuardianRuntimeHealth.Run(\"\
+        UtilitySpatial\",ClientSpatialTelemetry.Tick);\n             ProcessVoteCommand();\n--- a/LobbyGuardian/Plugin/LocalEffects.cs\n\
+        +++ b/LobbyGuardian/Plugin/LocalEffects.cs\n@@ -64,9 +64,10 @@\n         } catch {return false;}\n     }\n \n+   \
+        \ private static Type? _cachedPlayerType;\n     private static object? LocalPlayer()\n     {\n-        var type=AppDomain.CurrentDomain.GetAssemblies()\n\
+        +        var type = _cachedPlayerType ??= AppDomain.CurrentDomain.GetAssemblies()\n             .Select(x=>x.GetType(\"\
+        PlayerControl\",false)).FirstOrDefault(t=>t is not null);\n         return type is null ? null : Get(type,\"LocalPlayer\"\
+        );\n     }\n@@ -77,6 +78,7 @@\n         // The existing collider logic remains unchanged. Visual changes are now managed\
+        \ separately.\n         requestedInvisibility=false;requestedPetHide=false;\n         bool nc=inLobby && requestedNoclip,\
+        \ inv=inLobby && requestedInvisibility, pet=inLobby && requestedPetHide;\n+        if(!nc&&!inv&&!pet&&!_noclip&&!_invisible&&!_hidePet)return;\n\
+        \         var player=LocalPlayer();\n         // The lobby may create the local character AFTER the setting was toggled.\n\
+        \         // Never mark an unavailable renderer as permanently applied; retry when it\n@@ -91,7 +93,8 @@\n       \
+        \      (!inv || (_previousCosmetics.HasValue && ReadBool(_cosmeticGameObject,\"activeSelf\")==false) ||\n        \
+        \              (_previousBodyRenderer.HasValue && ReadBool(_bodyRenderer,\"enabled\")==false)) &&\n             (!nc\
+        \ || _collider is not null) && (!pet || _petGameObject is not null))return;\n-        if(DateTimeOffset.UtcNow<_retryAt)return;\n\
+        +        // Restore a mod-owned lobby collider immediately when leaving pregame.\n+        if(DateTimeOffset.UtcNow<_retryAt\
+        \ && !( _noclip && !nc))return;\n         _retryAt=DateTimeOffset.UtcNow.AddMilliseconds(600);\n         string status=\"\
+        \";\n         if(nc!=_noclip)\n--- a/LobbyGuardian/Plugin/PettingHand.cs\n+++ b/LobbyGuardian/Plugin/PettingHand.cs\n\
+        @@ -174,7 +174,11 @@\n         try{\n             var client=GameBridge.Client;\n             var state=Get(client,\"\
+        GameState\")?.ToString();\n-            if(!string.Equals(state,\"Joined\",StringComparison.OrdinalIgnoreCase)||!int.TryParse(Get(client,\"\
+        GameId\")?.ToString(),out int room)||room==0||room==-1){StopLive(\"Lobby ended\");return;}\n+            if(!string.Equals(state,\"\
+        Joined\",StringComparison.OrdinalIgnoreCase)||!int.TryParse(Get(client,\"GameId\")?.ToString(),out int room)||room==0||room==-1){\n\
+        +                StopLive(\"Lobby ended\");\n+                try{File.Delete(At(\"LobbyGuardian-petting-live.json\"\
+        ));}catch{}\n+                return;\n+            }\n             if(now>=_liveRead){\n                 _liveRead=now.AddMilliseconds(100);\n\
+        \                 var path=At(\"LobbyGuardian-petting-live.json\");\n--- a/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\n\
+        +++ b/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\n@@ -55,12 +55,12 @@\n            \
+        \ Button bubble = new Button(activity);\n             bubble.setTag(BUTTON_TAG);\n             bubble.setAllCaps(false);\n\
+        -            bubble.setText(\"LG\");\n-            bubble.setTextSize(12);bubble.setMinHeight(0);bubble.setMinimumHeight(0);bubble.setMinWidth(0);bubble.setMinimumWidth(0);\n\
+        +            bubble.setText(\"LG\\n-- FPS\");\n+            bubble.setTextSize(9);bubble.setGravity(Gravity.CENTER);bubble.setSingleLine(false);bubble.setMaxLines(2);bubble.setMinHeight(0);bubble.setMinimumHeight(0);bubble.setMinWidth(0);bubble.setMinimumWidth(0);\n\
+        \             bubble.setTextColor(Color.WHITE);\n             bubble.setTypeface(Typeface.DEFAULT_BOLD);\n       \
+        \      bubble.setContentDescription(\"Open Lobby Guardian controls\");\n-            bubble.setPadding(dp(activity,\
+        \ 8), 0, dp(activity, 8), 0);\n+            bubble.setPadding(dp(activity, 2), 0, dp(activity, 2), 0);\n         \
+        \    GradientDrawable shape = new GradientDrawable();\n             shape.setColor(Color.rgb(55,100,132));\n     \
+        \        shape.setCornerRadius(dp(activity, 8));\n@@ -101,12 +101,40 @@\n                 }\n             });\n  \
+        \           watchAlerts(activity);\n+            watchFrameRate(activity,bubble);\n             Log.i(TAG, \"Floating\
+        \ controls attached to game activity \" + activity.getClass().getName());\n         } catch (Throwable ex) {\n   \
+        \          Log.e(TAG, \"Failed to attach in-game UI\", ex);\n         }\n     }\n \n+    private static JSONObject\
+        \ freshFrameHealth() throws Exception {\n+        JSONObject j=new JSONObject(read(config(\"LobbyGuardian-frame-health.json\"\
+        ),2048));\n+        if(Math.abs(System.currentTimeMillis()-j.optLong(\"atUtcMs\",0))>5000L)throw new IllegalStateException(\"\
+        FPS sample stale\");\n+        return j;\n+    }\n+    private static void watchFrameRate(Activity a,Button bubble){\n\
+        +        Runnable refresh=new Runnable(){public void run(){\n+            if(a.isFinishing()||a.isDestroyed()||!bubble.isAttachedToWindow())return;\n\
+        +            String label=\"LG\\n-- FPS\";\n+            if(a.hasWindowFocus())try{\n+                JSONObject j=freshFrameHealth();double\
+        \ fps=j.optDouble(\"fps\",Double.NaN);\n+                if(!Double.isNaN(fps)&&fps>=0)label=\"LG\\n\"+Math.round(fps)+\"\
+        \ FPS\";\n+            }catch(Exception ignored){}\n+            if(!label.contentEquals(bubble.getText()))bubble.setText(label);\n\
+        +            bubble.postDelayed(this,a.hasWindowFocus()?1000L:2500L);\n+        }};\n+        bubble.postDelayed(refresh,1000L);\n\
+        +    }\n+    private static void showFrameHealth(Activity a){\n+        String message=\"FPS unavailable — open the\
+        \ game and wait for a fresh sample.\";\n+        try{JSONObject j=freshFrameHealth();\n+            message=\"Unity\
+        \ FPS: \"+(j.isNull(\"fps\")?\"Unavailable\":j.optString(\"fps\"))+\"\\nGame update Hz: \"+j.optString(\"updateHz\"\
+        )+\n+                \"\\nMod average: \"+j.optString(\"modAverageMs\")+\" ms\\nMod peak: \"+j.optString(\"modMaxMs\"\
+        )+\n+                \" ms\\nState: \"+j.optString(\"state\")+\"\\nNative CanMove: \"+j.optString(\"canMove\",\"Unknown\"\
+        );\n+        }catch(Exception ignored){}\n+        new AlertDialog.Builder(a).setTitle(\"Frame performance\").setMessage(message).setPositiveButton(\"\
+        Close\",null).show();\n+    }\n     private static final java.util.WeakHashMap<Activity,java.util.ArrayDeque<String>>\
+        \ ALERT_QUEUE = new java.util.WeakHashMap<>();\n     private static final java.util.WeakHashMap<Activity,Boolean>\
+        \ ALERT_BUSY = new java.util.WeakHashMap<>();\n     private static void showLongAlert(Activity a,String msg) {\n@@\
+        \ -1150,6 +1178,7 @@\n         class Live {\n             void send(boolean enabled){\n                 try{\n+  \
+        \                  if(!enabled){File old=config(\"LobbyGuardian-petting-live.json\");if(old.isFile())old.delete();return;}\n\
+        \                     JSONObject cmd=new JSONObject();cmd.put(\"enabled\",enabled);cmd.put(\"gameId\",gameId);cmd.put(\"\
+        share\",share);\n                     cmd.put(\"x\",(double)joy[0]);cmd.put(\"y\",(double)joy[1]);cmd.put(\"reset\"\
+        ,reset[0]);cmd.put(\"createdUtcMs\",System.currentTimeMillis());\n                     File f=config(\"LobbyGuardian-petting-live.json\"\
+        );File dir=f.getParentFile();\n@@ -1390,7 +1419,7 @@\n             logo.setGravity(Gravity.CENTER_VERTICAL);\n   \
+        \          top.addView(logo,new LinearLayout.LayoutParams(0,dp(activity,32),1));\n             TextView version =\
+        \ new TextView(activity);\n-            version.setText(\"v4.3.81\");\n+            version.setText(\"v4.3.82\");\n\
+        \             version.setTextColor(MUTED);\n             version.setTextSize(10);\n             top.addView(version);\n\
+        @@ -1544,6 +1573,7 @@\n             });\n             section(activity, overview,\"Dashboard\",\"Start here to check\
+        \ the menu and manage your lobby.\");\n             text(activity,overview,config(STATUS).isFile()?\"Game plugin status\
+        \ available. Open Technical details for the last report.\":\"Game plugin not detected yet. Open the game first.\"\
+        );\n+            actionButton(activity,overview,\"FPS & frame diagnostics\",v->showFrameHealth(activity));\n     \
+        \        technical(activity,overview,\"Runtime\",getStatus());\n             technical(activity,overview,\"Client\
+        \ engine\",read(config(\"LobbyGuardian-client-status.json\"),4000));\n             line(activity,overview,\"Host protection\"\
+        ,\"Choose players from the room or manage saved ban / kick / whitelist entries in HOST.\");\nLG_PATCH_4382\ngit apply\
+        \ --check /tmp/lg4382.patch\ngit apply /tmp/lg4382.patch\n"
+    - name: Compile final patched plugin and verify embedded binary
+      shell: bash
+      run: |
+        dotnet build LobbyGuardian/LobbyGuardian.Plugin.csproj --configuration Release --no-restore --no-incremental
+        python3 - <<'PY_REPACK_4377'
+        from pathlib import Path
+        import hashlib, os, zipfile
+        asset=Path('fusionApp/src/main/assets/BepInEx-arm64.zip')
+        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll')
+        assert asset.is_file() and dll.is_file(), 'Final build input missing'
+        blob=dll.read_bytes()
+        assert 'LobbyGuardian-frame-health.json'.encode('utf-16le') in blob, 'FPS telemetry missing from compiled plugin'
+        assert 'separated chat layout='.encode('utf-16le') in blob, 'Chat layout patch absent'
+        assert 'ghost-contrast'.encode('utf-16le') in blob, 'Ghost contrast patch absent'
+        # Detect the exact stale compiled code observed inside the v4.3.76 APK.
+        assert 'Switch the lobby to Private'.encode('utf-16le') not in blob, 'Old private-room gate still compiled into plugin'
+        assert 'Shared decorations stopped outside the original hosted pregame room'.encode('utf-16le') in blob, 'Final clone patch absent from compiled plugin'
+        assert 'normal-host-start'.encode('utf-16le') in blob, 'Final host start patch absent from compiled plugin'
+        replacement=asset.with_name('guardian4377-bepinex.zip')
+        with zipfile.ZipFile(asset) as old, zipfile.ZipFile(replacement,'w') as new:
+            prefix=next((n[:-len('core/BepInEx.Core.dll')] for n in old.namelist() if n.endswith('core/BepInEx.Core.dll')),None)
+            assert prefix is not None, 'BepInEx core missing'
+            target=prefix+'plugins/LobbyGuardian.Plugin.dll'
+            for item in old.infolist():
+                if item.filename!=target:new.writestr(item,old.read(item.filename))
+            new.writestr(target,blob,compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(replacement,asset)
+        with zipfile.ZipFile(asset) as z:
+            assert z.namelist().count(target)==1 and z.read(target)==blob, 'Embedded plugin mismatch'
+        print('Final plugin SHA256:', hashlib.sha256(blob).hexdigest())
+        PY_REPACK_4377
+    - name: Build v4.3.82 Android APK
+      shell: bash
+      run: |
+        python3 - <<'PY_BUILD'
+        from pathlib import Path
+        import subprocess,yaml,tempfile
+        old=yaml.safe_load(Path('.github/workflows/lobbyguardian-v4338-fix-ghost-chat-alwayschat-ghosts-vents-spoof.yml').read_text(encoding='utf8'))
+        steps=old['jobs']['android']['steps']
+        item=next(s for s in steps if s.get('name')=='Build v4.3.38 Android candidate APK')
+        assert item.get('run'), 'Missing v4.3.38 APK packaging script'
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf8',suffix='.sh',delete=False) as temp:
+            temp.write(item['run'])
+            script_file=temp.name
+        try:
+            subprocess.run(['bash','-eo','pipefail',script_file],check=True)
+        finally:
+            Path(script_file).unlink(missing_ok=True)
+        print('v4.3.82 Android APK assembly completed')
+        PY_BUILD
+    - name: Verify final APK contains exact freshly built plugin
+      shell: bash
+      run: |
+        python3 - <<'PY_VERIFY_4377'
+        from pathlib import Path
+        import hashlib, io, zipfile
+        expected=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()
+        apks=sorted(Path('fusionApp/build/outputs/apk/debug').glob('*.apk'))
+        assert apks, 'No final APK produced'
+        for apk in apks:
+            with zipfile.ZipFile(apk) as z:
+                with zipfile.ZipFile(io.BytesIO(z.read('assets/BepInEx-arm64.zip'))) as inner:
+                    matches=[n for n in inner.namelist() if n.endswith('plugins/LobbyGuardian.Plugin.dll')]
+                    assert len(matches)==1, 'Missing or duplicate packaged plugin'
+                    actual=inner.read(matches[0])
+                    assert actual==expected, 'Stale plugin in final APK: refusing upload'
+            print(apk.name, 'verified plugin SHA256:',hashlib.sha256(expected).hexdigest())
+        PY_VERIFY_4377
+    - name: Upload v4.3.82 Android APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.82-Android-FpsMatchTransition
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload v4.3.82 plugin source and diagnostics
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.82-Sources-Diagnostics
+        path: |
+          LobbyGuardian/Plugin/*.cs
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+          LobbyGuardian/Plugin/HostResilienceShield.cs
+          LobbyGuardian/Plugin/HostEndGame.cs
+          LobbyGuardian/Plugin/RpcAutoBanGuard.cs
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianFavorites.java
+          fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java
+        if-no-files-found: error
