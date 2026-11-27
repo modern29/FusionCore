@@ -1,0 +1,185 @@
+name: Lobby Guardian v4.3.85 - FPS and moderator routing repair
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4385-fps-moderator-repair.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - uses: gradle/actions/setup-gradle@v4
+    - name: Install PyYAML
+      run: python3 -m pip install --user PyYAML
+    - name: Recreate v4.3.84 and repair moderator routing and frame target
+      shell: bash
+      run: "python3 - <<'PY_4385'\nfrom pathlib import Path\nimport subprocess,tempfile,yaml\nsource=Path('.github/workflows/lobbyguardian-v4384-delegated-host-controls.yml')\n\
+        steps=yaml.safe_load(source.read_text())['jobs']['android']['steps']\nold=next(s['run'] for s in steps if s.get('name')=='Recreate\
+        \ v4.3.82, apply 30 FPS and delegated host controls')\nmarker=\"run_step('Compile final patched plugin and verify\
+        \ embedded binary')\"\nassert old.count(marker)==1\nprep=old.split(marker,1)[0]+'PY\\n'\nwith tempfile.NamedTemporaryFile(mode='w',suffix='.sh',delete=False)\
+        \ as f:\n    f.write(prep);name=Path(f.name)\ntry:subprocess.run(['bash','-eo','pipefail',str(name)],check=True)\n\
+        finally:name.unlink(missing_ok=True)\npatch='--- a/LobbyGuardian/Plugin/ChatModerators.cs\\n+++ b/LobbyGuardian/Plugin/ChatModerators.cs\\\
+        n@@ -72,7 +72,10 @@\\n         if(permission==\"\")return false;\\n         if(!Enabled(settings,permission)){Status(\"\
+        chat-denied\",permission+\" is disabled\");return true;}\\n         if(!Pregame()||Room()==\"\"||Room()==\"0\"||Room()==\"\
+        -1\"){Status(\"chat-denied\",\"Current hosted pregame required\");return true;}\\n-        if(!int.TryParse(Member(sender,\"\
+        OwnerId\")?.ToString(),out int moderatorId)||!Connected(moderatorId,friendCode)){Status(\"chat-denied\",\"Connected\
+        \ moderator identity could not be verified\");return true;}\\n+        var owner=Member(sender,\"OwnerId\")??Member(sender,\"\
+        ownerId\");\\n+        if(!int.TryParse(owner?.ToString(),out int moderatorId)||!Connected(moderatorId,friendCode)){\\\
+        n+            Status(\"chat-denied\",\"Connected moderator identity could not be verified (owner=\"+(owner?.ToString()??\"\
+        missing\")+\")\");return true;\\n+        }\\n         string gameId=Room(),moderatorCode=friendCode;long createdUtcMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();\\\
+        n         bool queued=false;\\n         if(permission==\"AllowLobbyLayout\"){\\n@@ -112,6 +115,22 @@\\n         if(queued)HostExtras.Warn(\"\
+        Moderator requested \"+action,\"moderator-request\");\\n         return true;\\n     }\\n+    // Extended actions\
+        \ are ordinary visible free-chat requests, never custom packets.\\n+    internal static bool TryExtendedText(string\
+        \ raw,out string forwarded){\\n+        forwarded=raw;\\n+        string payload=raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)?raw[8..]:\\\
+        n+            raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase)?raw[4..]:raw.StartsWith(\\'/\\')?raw[1..]:\"\
+        \";\\n+        var parts=payload.Split(\\' \\',2,StringSplitOptions.RemoveEmptyEntries);\\n+        if(parts.Length==0)return\
+        \ false;\\n+        string action=parts[0].ToLowerInvariant();\\n+        if(action==\"sharedclones\")action=\"clones\"\
+        ;\\n+        if(!(action is \"destroy\" or \"remove\" or \"restore\" or \"start\" or \"settings\" or \"tempban\" or\
+        \ \"clones\" or \"help\"))return false;\\n+        // A plain /clones or /help remains a local action; use /sharedclones\
+        \ or /cmd lg clones.\\n+        if((action==\"clones\"||action==\"help\")&&!raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)&&\\\
+        n+           !raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase)&&!raw.StartsWith(\"/sharedclones\",StringComparison.OrdinalIgnoreCase))return\
+        \ false;\\n+        if(action==\"settings\"&&!raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)&&!raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase))return false;\\n+        forwarded=\"!lg \"+action+(parts.Length==2?\"\
+        \ \"+parts[1].Trim():\"\");return true;\\n+    }\\n     internal static bool IsDelegatedText(string raw){\\n     \
+        \    if(raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase))return true;\\n         if(raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase))return true;\\n@@ -136,11 +155,11 @@\\n                 return;\\n    \
+        \         }\\n \\n-            string friendCode=GetPath(sender,\"Data.FriendCode\")?.ToString() ?? \"\";\\n+    \
+        \        string friendCode=(GetPath(sender,\"Data.FriendCode\")?.ToString() ?? \"\").Trim();\\n             if(string.IsNullOrWhiteSpace(friendCode)){Status(\"\
+        chat-ignored\",\"Sender has no stable Friend Code\");return;}\\n             using var doc=JsonDocument.Parse(File.ReadAllText(At(\"\
+        LobbyGuardian-moderators.json\")));\\n             var settings=doc.RootElement;\\n-            if(!settings.TryGetProperty(\"\
+        Enabled\",out var enabled)||enabled.ValueKind!=JsonValueKind.True)return;\\n+            if(!settings.TryGetProperty(\"\
+        Enabled\",out var enabled)||enabled.ValueKind!=JsonValueKind.True){Status(\"chat-denied\",\"Moderator commands disabled\
+        \ on host\");return;}\\n             if(!settings.TryGetProperty(\"FriendCodes\",out var allow)||allow.ValueKind!=JsonValueKind.Array)return;\\\
+        n             bool trusted=allow.EnumerateArray().Any(x=>x.ValueKind==JsonValueKind.String &&\\n                 \
+        \         string.Equals(x.GetString()?.Trim(),friendCode,StringComparison.OrdinalIgnoreCase));\\n--- a/LobbyGuardian/Plugin/WhisperRelay.cs\\\
+        n+++ b/LobbyGuardian/Plugin/WhisperRelay.cs\\n@@ -188,6 +188,9 @@\\n         string raw = (__0 ?? \"\").Trim();\\\
+        n         // Keep local commands local. Only explicit delegated commands from a\\n         // non-host may use native\
+        \ chat; !lg is an intentionally visible fallback.\\n+        if(!GameBridge.IsHost()&&ChatModerators.TryExtendedText(raw,out\
+        \ var visible)){\\n+            __0=visible;return true;\\n+        }\\n         if(!GameBridge.IsHost()&&ChatModerators.IsDelegatedText(raw)&&\\\
+        n            !raw.StartsWith(\"/cmd lg dm \",StringComparison.OrdinalIgnoreCase)){\\n             if(raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase))return\
+        \ true;\\n--- a/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\\n+++ b/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\\\
+        n@@ -303,7 +303,35 @@\\n             }\\n             if(raw.Length==0||raw[0]!=\\'/\\')return true;\\n          \
+        \   string forward=raw;\\n-            if(WhisperRelay.OutgoingPrefix(ref forward))return true;\\n+            if(WhisperRelay.OutgoingPrefix(ref\
+        \ forward)){\\n+                // SendFreeChat reads the field again; a ref to a local string alone does not update\
+        \ it.\\n+                if(forward==raw)return true;\\n+                foreach(object? input in new[]{area,field}){\\\
+        n+                    if(input is null)continue;\\n+                    foreach(string name in new[]{\"text\",\"Text\"\
+        }){\\n+                        try{\\n+                            var prop=input.GetType().GetProperty(name,f);\\\
+        n+                            if(prop?.CanWrite==true&&prop.PropertyType==typeof(string)){\\n+                   \
+        \             prop.SetValue(input,forward);\\n+                                if(string.Equals(Read(input,name)?.ToString(),forward,StringComparison.Ordinal))return\
+        \ true;\\n+                            }\\n+                            var fld=input.GetType().GetField(name,f);\\\
+        n+                            if(fld!=null&&!fld.IsInitOnly&&fld.FieldType==typeof(string)){\\n+                 \
+        \               fld.SetValue(input,forward);\\n+                                if(string.Equals(Read(input,name)?.ToString(),forward,StringComparison.Ordinal))return\
+        \ true;\\n+                            }\\n+                        }catch{}\\n+                    }\\n+        \
+        \            foreach(var m in input.GetType().GetMethods(f).Where(m=>\\n+                        (m.Name==\"SetTextWithoutNotify\"\
+        ||m.Name==\"SetText\")&&m.GetParameters().Length==1&&m.GetParameters()[0].ParameterType==typeof(string))){\\n+   \
+        \                     try{m.Invoke(input,new object[]{forward});\\n+                            if(string.Equals(Read(input,\"\
+        text\")?.ToString()??Read(input,\"Text\")?.ToString(),forward,StringComparison.Ordinal))return true;\\n+         \
+        \               }catch{}\\n+                    }\\n+                }\\n+                WhisperRelay.LocalChatNotice(\"\
+        [LG] Could not update the chat draft. Type this in normal chat: \"+forward);\\n+                return false;\\n+\
+        \            }\\n             if(raw.StartsWith(\"/dm \",StringComparison.OrdinalIgnoreCase)||\\n                raw.StartsWith(\"\
+        /whisper \",StringComparison.OrdinalIgnoreCase)||\\n                raw.StartsWith(\"/w \",StringComparison.OrdinalIgnoreCase)){\\\
+        n--- a/LobbyGuardian/Plugin/FrameHealth.cs\\n+++ b/LobbyGuardian/Plugin/FrameHealth.cs\\n@@ -45,24 +45,41 @@\\n  \
+        \       return true;\\n     }\\n     private const int TargetFps=30;\\n-    private static Type? _applicationType;\\\
+        n-    private static PropertyInfo? _targetRateProperty;\\n-    private static int? _effectiveTarget;\\n+    private\
+        \ static Type? _applicationType,_renderType;\\n+    private static MethodInfo? _targetSet,_targetGet,_intervalSet,_intervalGet;\\\
+        n+    private static int? _effectiveTarget,_renderInterval;\\n     private static string _targetStatus=\"pending\"\
+        ;\\n-    // Runs on the existing game update thread, at the existing one-second sample interval.\\n-    // Do not\
+        \ alter physics, game time, input, or network update intervals.\\n+    private static bool _targetInitialized;\\n+\
+        \    // Use the actual Unity static accessors on the game thread, and read back the result.\\n+    private static\
+        \ MethodInfo? Accessor(Type? t,string name,Type[] args){\\n+        if(t==null)return null;\\n+        return t.GetMethod(name,BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Static,null,args,null);\\\
+        n+    }\\n     private static void ApplyTargetFps(){\\n         try{\\n             _applicationType??=Find(\"UnityEngine.Application\"\
+        );\\n-            _targetRateProperty??=_applicationType?.GetProperty(\"targetFrameRate\",BindingFlags.Public|BindingFlags.Static);\\\
+        n-            if(_targetRateProperty==null||!_targetRateProperty.CanWrite||!_targetRateProperty.CanRead){\\n-    \
+        \            _targetStatus=\"unavailable\";_effectiveTarget=null;return;\\n+            var p=_applicationType?.GetProperty(\"\
+        targetFrameRate\",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Static);\\n+            _targetSet??=p?.GetSetMethod(true)??Accessor(_applicationType,\"\
+        set_targetFrameRate\",new[]{typeof(int)});\\n+            _targetGet??=p?.GetGetMethod(true)??Accessor(_applicationType,\"\
+        get_targetFrameRate\",Type.EmptyTypes);\\n+            if(_targetSet==null){_targetStatus=\"Unity target setter unavailable\"\
+        ;_effectiveTarget=null;return;}\\n+            var before=_targetGet?.Invoke(null,null);\\n+            if(!_targetInitialized||before\
+        \ is not int rate||rate!=TargetFps){\\n+                _targetSet.Invoke(null,new object[]{TargetFps});_targetInitialized=true;\\\
+        n             }\\n-            if(_targetRateProperty.GetValue(null) is int existing && existing!=TargetFps)\\n- \
+        \               _targetRateProperty.SetValue(null,TargetFps);\\n-            _effectiveTarget=_targetRateProperty.GetValue(null)\
+        \ is int value?value:null;\\n-            _targetStatus=_effectiveTarget==TargetFps?\"30 FPS target applied\":\"target\
+        \ not accepted\";\\n-        }catch(Exception e){_effectiveTarget=null;_targetStatus=e.GetBaseException().GetType().Name;}\\\
+        n+            _effectiveTarget=_targetGet?.Invoke(null,null) is int value?value:null;\\n+            _targetStatus=_effectiveTarget==TargetFps?\"\
+        30 FPS target applied\":_effectiveTarget.HasValue?\"Unity returned a different target\":\"Target requested; readback\
+        \ unavailable\";\\n+        }catch(Exception e){_effectiveTarget=null;_targetInitialized=false;_targetStatus=e.GetBaseException().GetType().Name+\"\
+        : \"+e.GetBaseException().Message;}\\n+        // Unity may intentionally skip rendering on some builds. Request a\
+        \ render every update,\\n+        // while keeping the engine\\'s 30 FPS pacing. Never change physics/time/network\
+        \ timing.\\n+        try{\\n+            _renderType??=Find(\"UnityEngine.Rendering.OnDemandRendering\");\\n+    \
+        \        var p=_renderType?.GetProperty(\"renderFrameInterval\",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Static);\\\
+        n+            _intervalGet??=p?.GetGetMethod(true);_intervalSet??=p?.GetSetMethod(true);\\n+            if(_intervalGet?.Invoke(null,null)\
+        \ is int interval){\\n+                if(interval>1&&_effectiveTarget==TargetFps&&_intervalSet!=null)_intervalSet.Invoke(null,new\
+        \ object[]{1});\\n+                _renderInterval=_intervalGet.Invoke(null,null) is int applied?applied:null;\\n+\
+        \            }\\n+        }catch{}\\n     }\\n     internal static long Begin(){\\n         long now=Stopwatch.GetTimestamp();\\\
+        n@@ -83,7 +100,7 @@\\n                     string tmp=path+\".tmp\";\\n                     File.WriteAllText(tmp,JsonSerializer.Serialize(new{fps,updateHz=Math.Round(_updates/seconds,1),\\\
+        n                         modAverageMs=_updates==0?0:Math.Round(_totalMs/_updates,2),modMaxMs=Math.Round(_maxMs,2),\\\
+        n-                        state=_state,canMove,targetFps=TargetFps,effectiveTargetFps=_effectiveTarget,targetStatus=_targetStatus,atUtcMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}));\\\
+        n+                        state=_state,canMove,targetFps=TargetFps,effectiveTargetFps=_effectiveTarget,renderInterval=_renderInterval,targetStatus=_targetStatus,atUtcMs=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}));\\\
+        n                     File.Move(tmp,path,true);\\n                 }\\n                 _sampleAt=now;_lastFrame=frame;_updates=0;_totalMs=0;_maxMs=0;\\\
+        n--- a/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\n+++ b/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        n@@ -129,7 +129,7 @@\\n     private static void showFrameHealth(Activity a){\\n         String message=\"FPS unavailable\
+        \ \u2014 open the game and wait for a fresh sample.\";\\n         try{JSONObject j=freshFrameHealth();\\n-       \
+        \     message=\"Unity FPS: \"+(j.isNull(\"fps\")?\"Unavailable\":j.optString(\"fps\"))+\"\\\\nTarget FPS: \"+j.optString(\"\
+        targetFps\",\"30\")+\"\\\\nApplied target: \"+j.optString(\"effectiveTargetFps\",\"Unavailable\")+\"\\\\nTarget status:\
+        \ \"+j.optString(\"targetStatus\",\"Unknown\")+\"\\\\nGame update Hz: \"+j.optString(\"updateHz\")+\\n+          \
+        \  message=\"Unity FPS: \"+(j.isNull(\"fps\")?\"Unavailable\":j.optString(\"fps\"))+\"\\\\nTarget FPS: \"+j.optString(\"\
+        targetFps\",\"30\")+\"\\\\nApplied target: \"+j.optString(\"effectiveTargetFps\",\"Unavailable\")+\"\\\\nTarget status:\
+        \ \"+j.optString(\"targetStatus\",\"Unknown\")+\"\\\\nRender interval: \"+j.optString(\"renderInterval\",\"Unavailable\"\
+        )+\"\\\\nGame update Hz: \"+j.optString(\"updateHz\")+\\n                 \"\\\\nMod average: \"+j.optString(\"modAverageMs\"\
+        )+\" ms\\\\nMod peak: \"+j.optString(\"modMaxMs\")+\\n                 \" ms\\\\nState: \"+j.optString(\"state\")+\"\
+        \\\\nNative CanMove: \"+j.optString(\"canMove\",\"Unknown\");\\n         }catch(Exception ignored){}\\n@@ -1419,7\
+        \ +1419,7 @@\\n             logo.setGravity(Gravity.CENTER_VERTICAL);\\n             top.addView(logo,new LinearLayout.LayoutParams(0,dp(activity,32),1));\\\
+        n             TextView version = new TextView(activity);\\n-            version.setText(\"v4.3.84\");\\n+        \
+        \    version.setText(\"v4.3.85\");\\n             version.setTextColor(MUTED);\\n             version.setTextSize(10);\\\
+        n             top.addView(version);\\n@@ -2047,7 +2047,7 @@\\n                     Toast.makeText(activity,\"Trusted\
+        \ moderators saved\",Toast.LENGTH_SHORT).show();\\n                 }catch(Exception e){Toast.makeText(activity,\"\
+        Could not save moderator permissions\",Toast.LENGTH_LONG).show();}\\n             });\\n-            section(activity,mods,\"\
+        Available commands\",\"/cmd lg kick 17 \xB7 /cmd lg ban 17 \xB7 /cmd lg tempban #17 5 \xB7 /cmd lg settings speed\
+        \ 1.25 \xB7 /cmd lg start \xB7 /cmd lg clones heart 20 \xB7 /cmd lg clones circle 12 \xB7 /cmd lg clones off \xB7\
+        \ /cmd lg remove lobby \xB7 /cmd lg restore lobby (private rooms only). If slash transport is unavailable, !lg followed\
+        \ by the same action is visible normal chat. Host must enable the relevant permission and save.\");\\n+          \
+        \  section(activity,mods,\"Available commands\",\"/cmd lg kick 17 \xB7 /cmd lg ban 17 \xB7 /cmd lg tempban #17 5 \xB7\
+        \ /cmd lg settings speed 1.25 \xB7 /cmd lg start \xB7 /cmd lg clones heart 20 \xB7 /cmd lg clones circle 12 \xB7 /cmd\
+        \ lg clones off \xB7 /cmd lg remove lobby \xB7 /cmd lg restore lobby (private rooms only). Extended commands use visible\
+        \ normal chat as !lg; type !lg clones heart 20 or !lg remove lobby directly if the slash draft cannot be updated.\
+        \ Host must enable the relevant permission and save.\");\\n             technical(activity,mods,\"Incoming vote monitoring\"\
+        ,read(config(\"LobbyGuardian-vote-observer.json\"),3000));\\n             actionButton(activity,mods,\"Show moderator\
+        \ command status\",v->\\n                 new AlertDialog.Builder(activity).setTitle(\"Moderator integration\")\\\
+        n'\nwith tempfile.NamedTemporaryFile(mode='w',suffix='.patch',delete=False) as f:\n    f.write(patch);name=Path(f.name)\n\
+        try:\n    subprocess.run(['git','apply','--check',str(name)],check=True)\n    subprocess.run(['git','apply',str(name)],check=True)\n\
+        finally:name.unlink(missing_ok=True)\nbase=yaml.safe_load(Path('.github/workflows/lobbyguardian-v4382-fps-match-transition.yml').read_text())['jobs']['android']['steps']\n\
+        for title in ('Compile final patched plugin and verify embedded binary','Build v4.3.82 Android APK','Verify final\
+        \ APK contains exact freshly built plugin'):\n    script=next(s['run'] for s in base if s.get('name')==title)\n  \
+        \  with tempfile.NamedTemporaryFile(mode='w',suffix='.sh',delete=False) as f:\n        f.write(script);name=Path(f.name)\n\
+        \    try:subprocess.run(['bash','-eo','pipefail',str(name)],check=True)\n    finally:name.unlink(missing_ok=True)\n\
+        \    if title.startswith('Compile'):\n        dll=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()\n\
+        \        for token in ('30 FPS target applied','Unity target setter unavailable','AllowSharedClones','Could not update\
+        \ the chat draft'):\n            assert token.encode('utf-16le') in dll,token\nPY_4385\n"
+    - name: Upload v4.3.85 Android APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.85-Android-FpsModeratorRepair
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - name: Upload v4.3.85 source diagnostics
+      uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.3.85-Sources-Diagnostics
+        path: |
+          LobbyGuardian/Plugin/*.cs
+          fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianUnifiedExtras.java
+          fusionApp/src/main/java/dev/allofus/fusioncore/GuardianFavorites.java
+        if-no-files-found: error
