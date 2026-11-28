@@ -1,0 +1,1273 @@
+name: Lobby Guardian v4.4.16 - Vanilla moderator chat
+'on':
+  push:
+    paths:
+    - .github/workflows/lobbyguardian-v4416-vanilla-moderators.yml
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+    - uses: gradle/actions/setup-gradle@v4
+    - run: python3 -m pip install --user PyYAML
+    - name: Rebuild with vanilla moderator chat replies
+      shell: bash
+      run: "python3 - <<'PY_4395'\nfrom pathlib import Path\nimport yaml, subprocess, tempfile, ast\nsource=Path('.github/workflows/lobbyguardian-v4394-role-colors.yml')\n\
+        steps=yaml.safe_load(source.read_text())['jobs']['android']['steps']\nrun=next(s['run'] for s in steps if\
+        \ s.get('name')=='Rebuild Lite Performance and role label colors')\nneedle='\\nexecute(script)\\n'\nassert\
+        \ run.count(needle)==1\nrepair='from pathlib import Path\\n\\ndef edit(path, old, new):\\n    p=Path(path);\
+        \ s=p.read_text(encoding=\\'utf8\\')\\n    assert s.count(old)==1, (path,old,s.count(old))\\n    p.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n\\nplugin=Path(\\'LobbyGuardian/Plugin\\')\\np=plugin/\\'FrameHealth.cs\\'\\ns=p.read_text(encoding=\\\
+        'utf8\\')\\n# Preserve the original chat/intro guard only, without frame sampling or writes.\\nassert s.count(\\\
+        '    private const int TargetFps=30;\\')==1\\ns=s.split(\\'    private const int TargetFps=30;\\',1)[0]+\\\
+        '}\\\\n\\'\\ns=s.replace(\\'internal static class FrameHealth\\',\\'internal static class MatchTransitionGuard\\\
+        ')\\ns=s.replace(\\'// Read-only Unity frame counter and local input-transition diagnostics.\\',\\'// Protect\
+        \ native chat during the match introduction; no FPS monitoring.\\')\\ns=s.replace(\\'    private static\
+        \ Type? _timeType,_playerType,_introType;\\',\\'    private static Type? _introType;\\')\\ns=s.replace(\\\
+        '    private static long _sampleAt,_phaseAt,_startAt;\\',\\'    private static long _phaseAt,_startAt;\\\
+        ')\\nfor line in (\\'    private static int? _lastFrame;\\\\n\\',\\'    private static int _updates;\\\\\
+        n\\',\\'    private static double _totalMs,_maxMs;\\\\n\\'):\\n    assert s.count(line)==1;s=s.replace(line,\\\
+        '\\')\\nfor line in (\\'using System.IO;\\\\n\\',\\'using System.Text.Json;\\\\n\\',\\'using BepInEx;\\\\\
+        n\\'):\\n    s=s.replace(line,\\'\\')\\n# Keep phase observation only when the chat feature is used; retain\
+        \ an\\n# explicit reset on room changes to avoid stale match-intro state.\\nneedle=\\'    internal static\
+        \ bool ChatUiReady(){\\'\\nassert s.count(needle)==1\\ns=s.replace(needle,\\'    internal static void Reset(){_phaseAt=0;_startAt=0;_started=false;_state=\"\
+        \";}\\\\n\\'+needle)\\np.write_text(s,encoding=\\'utf8\\')\\np.rename(plugin/\\'MatchTransitionGuard.cs\\\
+        ')\\ncore=plugin/\\'LobbyGuardianPlugin.cs\\'\\nedit(core,\\'        long started=FrameHealth.Begin();\\\
+        \\n        try{\\\\n\\',\\'\\')\\nedit(core,\\'        }finally{FrameHealth.End(started);}\\\\n\\',\\'\\\
+        ')\\nedit(core,\\'    private static void ClientGameJoinedPostfix() => ClientFeatures.OnGameJoined();\\\
+        ',\\'    private static void ClientGameJoinedPostfix() { MatchTransitionGuard.Reset(); ClientFeatures.OnGameJoined();\
+        \ }\\')\\nedit(core,\\'    private static void ClientDisconnectedPostfix() {\\',\\'    private static void\
+        \ ClientDisconnectedPostfix() {\\\\n        MatchTransitionGuard.Reset();\\')\\n# Keep all incoming RPC\
+        \ checks immediate. Only periodic maintenance is gated.\\nedit(core,\\'    private static long _nextSafetyMaintenance,_nextConnectionMaintenance;\\\
+        ',\\'    private static long _nextSafetyMaintenance,_nextConnectionMaintenance,_nextRpcMaintenance;\\')\\\
+        nedit(core,\\'            HostResilienceShield.Tick(); BotShield.Tick(); RpcAutoBanGuard.Tick();\\',\\'\
+        \            HostResilienceShield.Tick(); BotShield.Tick();\\\\n            if(now>=_nextRpcMaintenance){_nextRpcMaintenance=now+250;RpcAutoBanGuard.Tick();}\\\
+        ')\\nutil=plugin/\\'UtilityFull.cs\\'\\ns=util.read_text(encoding=\\'utf8\\');assert s.count(\\'FrameHealth.ChatUiReady()\\\
+        ')==2\\nutil.write_text(s.replace(\\'FrameHealth.ChatUiReady()\\',\\'MatchTransitionGuard.ChatUiReady()\\\
+        '),encoding=\\'utf8\\')\\n# Preserve native/server eligibility and host checks; remove only the mod gate.\\\
+        nedit(util,\\'        // Native game rule is authoritative; use the actual connected client list, not dummy\
+        \ decorations.\\\\n        int players=GameBridge.ReadConnectedPlayers().Where(p=>p.ClientId>=0).Select(p=>p.ClientId).Distinct().Count();\\\
+        \\n        int minimum=4;\\\\n        if(int.TryParse(Get(manager,\"MinPlayers\",\"minPlayers\",\"MinimumPlayers\"\
+        )?.ToString(),out int nativeMin)&&nativeMin>=4&&nativeMin<=15)minimum=nativeMin;\\\\n        if(players<minimum){StartActionStatus(r,\"\
+        too-few-players\",$\"Connected players: {players}; required: {minimum}\");return;}\\\\n\\',\\'        //\
+        \ Request the native host action without imposing a separate mod player-count rule.\\\\n\\')\\n# Publish\
+        \ a start-specific pregame state; do not depend on the player list\\n# or the general-purpose lobby-visual\
+        \ detector for start eligibility.\\nclient=plugin/\\'ClientFeatures.cs\\'\\nedit(client,\\'            lobby\
+        \ = IsLobby(), host = GameBridge.IsHost(), gameId, atUtc = DateTimeOffset.UtcNow.ToString(\"O\"), players\\\
+        ',\\'\\'\\'            lobby = IsLobby(), host = GameBridge.IsHost(), gameId,\\n            startEligible\
+        \ = GameBridge.IsHost() && gameId!=0 && gameId!=-1 && (Get(GameBridge.Client,\"GameState\")?.ToString()\
+        \ is \"Joined\" or \"Lobby\" or \"1\"),\\n            atUtc = DateTimeOffset.UtcNow.ToString(\"O\"), players\\\
+        '\\'\\')\\n# Diagnostics unrelated to controls need not rewrite every few seconds.\\nbadges=plugin/\\'LobbyNameBadges.cs\\\
+        '\\ns=badges.read_text(encoding=\\'utf8\\');assert s.count(\\'_nextBadgeStatus=now.AddSeconds(3);\\')==2\\\
+        nbadges.write_text(s.replace(\\'_nextBadgeStatus=now.AddSeconds(3);\\',\\'_nextBadgeStatus=now.AddSeconds(15);\\\
+        '),encoding=\\'utf8\\')\\nui=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        ')\\nedit(ui,\\'            bubble.setText(\"LG\\\\\\\\n-- FPS\");\\',\\'            bubble.setText(\"LG\"\
+        );\\')\\nedit(ui,\\'bubble.setTextSize(9);bubble.setGravity(Gravity.CENTER);bubble.setSingleLine(false);bubble.setMaxLines(2);\\\
+        ',\\'bubble.setTextSize(12);bubble.setGravity(Gravity.CENTER);bubble.setSingleLine(true);bubble.setMaxLines(1);\\\
+        ')\\nedit(ui,\\'            watchFrameRate(activity,bubble);\\\\n\\',\\'\\')\\ns=ui.read_text(encoding=\\\
+        'utf8\\'); a=s.index(\\'    private static JSONObject freshFrameHealth()\\');b=s.index(\\'    private static\
+        \ final java.util.WeakHashMap<Activity,java.util.ArrayDeque<String>> ALERT_QUEUE\\',a)\\ns=s[:a]+s[b:];ui.write_text(s,encoding=\\\
+        'utf8\\')\\nedit(ui,\\'            actionButton(activity,account,\"FPS & Performance\",v->showFrameHealth(activity));\\\
+        \\n\\',\\'\\')\\nedit(ui,\\'j.optBoolean(\"host\")&&j.optBoolean(\"lobby\")&&j.optInt(\"gameId\",0)!=0\\\
+        ',\\'j.optBoolean(\"host\")&&j.optBoolean(\"startEligible\",j.optBoolean(\"lobby\"))&&j.optInt(\"gameId\"\
+        ,0)!=0\\')\\nedit(ui,\\'!room.optBoolean(\"host\")||!room.optBoolean(\"lobby\")||id==0\\',\\'!room.optBoolean(\"\
+        host\")||!room.optBoolean(\"startEligible\",room.optBoolean(\"lobby\"))||id==0\\')\\nedit(ui,\\'Normal host\
+        \ start. Game requirements still apply.\\',\\'Normal host start. Public and private requests use native\
+        \ game/server rules.\\')\\nedit(ui,\\'version.setText(\"v4.3.94\");\\',\\'version.setText(\"v4.3.96\");\\\
+        ')\\nassert not any(\\'FrameHealth.\\' in f.read_text(encoding=\\'utf8\\') for f in plugin.glob(\\'*.cs\\\
+        '))\\nassert \\'FPS\\' not in ui.read_text(encoding=\\'utf8\\')\\nassert not (plugin/\\'FrameHealth.cs\\\
+        ').exists()\\nprint(\\'Removed FPS telemetry and overlay; preserved match-transition guard and native host\
+        \ start checks\\')\\n\\n# v4.3.97: apply checked source delta before final compile and APK repack.\\nimport\
+        \ subprocess, tempfile\\nwith tempfile.NamedTemporaryFile(mode=\\'w\\',encoding=\\'utf8\\',suffix=\\'.patch\\\
+        ',delete=False) as f:\\n    f.write(\\'--- a/LobbyGuardian/Plugin/ChatModerators.cs\\\\n+++ b/LobbyGuardian/Plugin/ChatModerators.cs\\\
+        \\n@@ -67,6 +67,33 @@\\\\n         if(ActionTimes.TryGetValue(key,out var last)&&now-last<TimeSpan.FromSeconds(seconds))return\
+        \ false;\\\\n         if(ActionTimes.Count>128)ActionTimes.Clear();ActionTimes[key]=now;return true;\\\\\
+        n     }\\\\n+    private static readonly string[] Colors={\"red\",\"blue\",\"green\",\"pink\",\"orange\"\
+        ,\"yellow\",\"black\",\"white\",\"purple\",\"brown\",\"cyan\",\"lime\",\"maroon\",\"rose\",\"banana\",\"\
+        gray\",\"tan\",\"coral\"};\\\\n+    private static string NormalizeColor(string input){\\\\n+        string\
+        \ key=input.Trim().ToLowerInvariant();\\\\n+        return key switch {\"grey\"=>\"gray\",\"light green\"\
+        =>\"lime\",\"light blue\"=>\"cyan\",_=>key};\\\\n+    }\\\\n+    internal static PlayerIdentity? ResolveTarget(string\
+        \ query){\\\\n+        query=query.Trim();if(query.Length==0)return null;\\\\n+        var connected=GameBridge.ReadConnectedPlayers().Where(p=>p.ClientId>=0&&!p.IsLocal&&!p.IsHost).GroupBy(p=>p.ClientId).ToDictionary(g=>g.Key,g=>g.First());\\\
+        \\n+        var roster=GameBridge.ReadVotingRoster().Where(p=>connected.ContainsKey(p.ClientId)&&!p.IsLocal&&!p.IsHost).ToArray();\\\
+        \\n+        if(query.StartsWith(\"#\")&&int.TryParse(query[1..],out int id))return roster.FirstOrDefault(p=>p.ClientId==id);\\\
+        \\n+        bool byName=query.StartsWith(\"name:\",StringComparison.OrdinalIgnoreCase);\\\\n+        bool\
+        \ byColor=query.StartsWith(\"color:\",StringComparison.OrdinalIgnoreCase);\\\\n+        if(byName)query=query[5..].Trim();if(byColor)query=query[6..].Trim();\\\
+        \\n+        int color=Array.IndexOf(Colors,NormalizeColor(query));\\\\n+        if(!byName&&(byColor||color>=0)){\\\
+        \\n+            if(color<0)return null;\\\\n+            var matches=roster.Where(p=>(p.ColorId??connected[p.ClientId].ColorId)==color).ToArray();\\\
+        \\n+            return matches.Length==1?matches[0]:null;\\\\n+        }\\\\n+        var names=roster.Where(p=>p.Name.Equals(query,StringComparison.OrdinalIgnoreCase)).ToArray();\\\
+        \\n+        if(names.Length!=0)return names.Length==1?names[0]:null;\\\\n+        if(!byName&&int.TryParse(query,out\
+        \ int bare))return roster.FirstOrDefault(p=>p.ClientId==bare);\\\\n+        return null;\\\\n+    }\\\\\
+        n+    private static string Alias(string action)=>action switch {\"k\"=>\"kick\",\"b\"=>\"ban\",\"tb\"=>\"\
+        tempban\",\"s\"=>\"start\",\"h\"=>\"help\",\"sharedclones\"=>\"clones\",_=>action};\\\\n+    private static\
+        \ bool ShortSetting(string action)=>action is \"speed\" or \"voting\" or \"discussion\" or \"crewvision\"\
+        \ or \"impvision\" or \"killcooldown\" or \"emergencycooldown\" or \"common\" or \"long\" or \"short\";\\\
+        \\n+    private static string Payload(string raw)=>raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)?raw[8..]:raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase)?raw[4..]:raw.StartsWith(\\\\\\'!\\\\\\')||raw.StartsWith(\\\\\
+        \\'/\\\\\\')?raw[1..]:\"\";\\\\n     private static bool ExtraCommand(string action,string arg,object sender,string\
+        \ friendCode,JsonElement settings){\\\\n         string permission=action is \"destroy\" or \"remove\" or\
+        \ \"restore\"?\"AllowLobbyLayout\":action==\"start\"?\"AllowStart\":action==\"clones\"?\"AllowSharedClones\"\
+        :action==\"settings\"?\"AllowSettings\":action==\"tempban\"?\"AllowTempban\":\"\";\\\\n         if(permission==\"\
+        \")return false;\\\\n@@ -96,9 +123,11 @@\\\\n             if(!Cooldown(friendCode,\"settings\",5)){Status(\"\
+        chat-rate-limit\",\"Wait before another setting request\");return true;}\\\\n             queued=Queue(\"\
+        LobbyGuardian-simple-host-command.json\",new{key,value,gameId,moderatorId,moderatorCode,ms=createdUtcMs});\\\
+        \\n         }else if(action==\"tempban\"){\\\\n-            string[] args=arg.Split(\\\\\\' \\\\\\',StringSplitOptions.RemoveEmptyEntries);\\\
+        \\n-            if(!Enabled(settings,\"AllowBan\")||args.Length!=2||!int.TryParse(args[0].TrimStart(\\\\\
+        \\'#\\\\\\'),out int targetClientId)||!int.TryParse(args[1],out int minutes)||!(minutes is 5 or 15 or 30\
+        \ or 60)||!int.TryParse(gameId,out int roomNumber)){Status(\"chat-invalid\",\"Requires ban permission; use\
+        \ tempban #clientId 5|15|30|60\");return true;}\\\\n-            var target=GameBridge.ReadVotingRoster().FirstOrDefault(p=>p.ClientId==targetClientId&&!p.IsHost&&!p.IsLocal&&p.ClientId!=moderatorId);\\\
+        \\n+            int lastSpace=arg.LastIndexOf(\\\\\\' \\\\\\');\\\\n+            if(!Enabled(settings,\"\
+        AllowBan\")||lastSpace<1||!int.TryParse(arg[(lastSpace+1)..],out int minutes)||!(minutes is 5 or 15 or 30\
+        \ or 60)||!int.TryParse(gameId,out int roomNumber)){Status(\"chat-invalid\",\"Requires ban permission; use\
+        \ tempban red 5|15|30|60\");return true;}\\\\n+            var target=ResolveTarget(arg[..lastSpace]);\\\
+        \\n+            if(target?.ClientId==moderatorId)target=null;\\\\n+            int targetClientId=target?.ClientId??-1;\\\
+        \\n             if(target==null||string.IsNullOrWhiteSpace(target.FriendCode)||Trusted(settings,target.FriendCode)){Status(\"\
+        chat-denied\",\"Target missing, protected or has no stable friend code\");return true;}\\\\n           \
+        \  if(!Cooldown(friendCode,\"tempban\",10)){Status(\"chat-rate-limit\",\"Wait before another timed restriction\"\
+        );return true;}\\\\n             queued=Queue(\"LobbyGuardian-tempban-command.json\",new{type=\"tempban\"\
+        ,gameId=roomNumber,moderatorId,moderatorCode,createdUtcMs,targetClientId,minutes,targetFriendCode=target.FriendCode});\\\
+        \\n@@ -118,31 +147,30 @@\\\\n     // Extended actions are ordinary visible free-chat requests, never custom\
+        \ packets.\\\\n     internal static bool TryExtendedText(string raw,out string forwarded){\\\\n        \
+        \ forwarded=raw;\\\\n-        string payload=raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)?raw[8..]:\\\
+        \\n-            raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase)?raw[4..]:raw.StartsWith(\\\\\
+        \\'/\\\\\\')?raw[1..]:\"\";\\\\n+        string payload=Payload(raw);\\\\n         var parts=payload.Split(\\\
+        \\\\' \\\\\\',2,StringSplitOptions.RemoveEmptyEntries);\\\\n         if(parts.Length==0)return false;\\\\\
+        n-        string action=parts[0].ToLowerInvariant();\\\\n-        if(action==\"sharedclones\")action=\"\
+        clones\";\\\\n-        if(!(action is \"destroy\" or \"remove\" or \"restore\" or \"start\" or \"settings\"\
+        \ or \"tempban\" or \"clones\" or \"help\"))return false;\\\\n-        // A plain /clones or /help remains\
+        \ a local action; use /sharedclones or /cmd lg clones.\\\\n-        if((action==\"clones\"||action==\"help\"\
+        )&&!raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)&&\\\\n-           !raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase)&&!raw.StartsWith(\"/sharedclones\",StringComparison.OrdinalIgnoreCase))return\
+        \ false;\\\\n-        if(action==\"settings\"&&!raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)&&!raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase))return false;\\\\n-        forwarded=\"!lg \"+action+(parts.Length==2?\"\
+        \ \"+parts[1].Trim():\"\");return true;\\\\n+        string first=parts[0].ToLowerInvariant(),action=Alias(first),arg=parts.Length==2?parts[1].Trim():\"\
+        \";\\\\n+        if(ShortSetting(action)){arg=action+\" \"+arg;action=\"settings\";}\\\\n+        bool explicitRequest=raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\\\
+        \\\\'!\\\\\\');\\\\n+        if((action is \"kick\" or \"ban\")&&first==action&&!raw.StartsWith(\\\\\\'!\\\
+        \\\\'))return false;\\\\n+        if(!(action is \"kick\" or \"ban\" or \"destroy\" or \"remove\" or \"\
+        restore\" or \"start\" or \"settings\" or \"tempban\" or \"clones\" or \"help\"))return false;\\\\n+   \
+        \     if((action==\"clones\"||action==\"help\"||action==\"settings\")&&!explicitRequest&&first==action)return\
+        \ false;\\\\n+        forwarded=\"!lg \"+action+(arg.Length>0?\" \"+arg:\"\");return true;\\\\n     }\\\\\
+        n     internal static bool IsDelegatedText(string raw){\\\\n-        if(raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase))return\
+        \ true;\\\\n-        if(raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase))return true;\\\\n- \
+        \       var first=raw.Split(\\\\\\' \\\\\\',2,StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant();\\\
+        \\n-        return first is \"/kick\" or \"/ban\" or \"/destroy\" or \"/remove\" or \"/restore\" or \"/start\"\
+        \ or \"/sharedclones\" or \"/tempban\";\\\\n+        if(raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\"\
+        !lg \",StringComparison.OrdinalIgnoreCase))return true;\\\\n+        if(!raw.StartsWith(\\\\\\'!\\\\\\')&&!raw.StartsWith(\\\
+        \\\\'/\\\\\\'))return false;\\\\n+        string first=Payload(raw).Split(\\\\\\' \\\\\\',2,StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant()??\"\
+        \";\\\\n+        string action=Alias(first);\\\\n+        return action is \"kick\" or \"ban\" or \"destroy\"\
+        \ or \"remove\" or \"restore\" or \"start\" or \"tempban\" || first==\"sharedclones\" || (raw.StartsWith(\\\
+        \\\\'!\\\\\\')&&(action is \"clones\" or \"help\" or \"settings\"||ShortSetting(action)));\\\\n     }\\\\\
+        n     internal static void OnChat(object[]? args)\\\\n     {\\\\n         try {\\\\n             if(!GameBridge.IsHost()||args\
+        \ is null||args.Length<2)return;\\\\n             string? message=args.OfType<string>().FirstOrDefault();\\\
+        \\n-            if(message is null||message.Length<5||message.Length>160)return;\\\\n+            if(message\
+        \ is null||message.Length<3||message.Length>160)return;\\\\n             var trimmed=message.Trim();\\\\\
+        n             if(!IsDelegatedText(trimmed))return;\\\\n             object? sender=args.FirstOrDefault(x=>x\
+        \ is not null && x is not string &&\\\\n@@ -167,27 +195,22 @@\\\\n             string key=friendCode+\"\
+        |\"+trimmed;\\\\n             if(key==_lastKey&&DateTimeOffset.UtcNow-_lastAt<TimeSpan.FromSeconds(2))return;\\\
+        \\n             _lastAt=DateTimeOffset.UtcNow;_lastKey=key;\\\\n-            string payload=trimmed.StartsWith(\"\
+        /cmd lg \",StringComparison.OrdinalIgnoreCase)?trimmed[8..]:trimmed.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase)?trimmed[4..]:trimmed[1..];\\\
+        \\n+            string payload=Payload(trimmed);\\\\n             string[] pieces=payload.Split(\\\\\\'\
+        \ \\\\\\',2,StringSplitOptions.RemoveEmptyEntries);\\\\n-            string action=pieces.Length>0?pieces[0].ToLowerInvariant():\"\
+        \";\\\\n-            if(action==\"sharedclones\")action=\"clones\";\\\\n+            string action=pieces.Length>0?Alias(pieces[0].ToLowerInvariant()):\"\
+        \";\\\\n             string arg=pieces.Length>1?pieces[1].Trim():\"\";\\\\n-            if(action==\"help\"\
+        ){Status(\"chat-help\",\"Moderator commands: kick, ban, tempban #id minutes, settings key value, start,\
+        \ clones heart/circle/off, private remove/restore lobby. Prefix /cmd lg or !lg (visible chat).\");return;}\\\
+        \\n-            if(ExtraCommand(action,arg.ToLowerInvariant(),sender,friendCode,settings))return;\\\\n+\
+        \            if(ShortSetting(action)){arg=action+\" \"+arg;action=\"settings\";}\\\\n+            if(action==\"\
+        help\"){Status(\"chat-help\",\"Commands: !k red, !b blue, !tb green 5, !speed 1.25, !voting 60, !s, !lg\
+        \ clones heart 12, !lg help. Color/name/#ID. Host permissions apply; visible chat.\");return;}\\\\n+   \
+        \         if(ExtraCommand(action,action==\"tempban\"?arg:arg.ToLowerInvariant(),sender,friendCode,settings))return;\\\
+        \\n             if(action==\"dm\") { Status(\"dm-unavailable\",\"Private packet delivery is not implemented;\
+        \ no message was sent\");return; }\\\\n             if((action!=\"ban\"&&action!=\"kick\")||pieces.Length<2){Status(\"\
+        chat-invalid\",\"Unknown or incomplete moderator command\");return;}\\\\n             if(action==\"ban\"\
+        &&(!settings.TryGetProperty(\"AllowBan\",out var banAllowed)||banAllowed.ValueKind!=JsonValueKind.True)){\\\
+        \\n                 Status(\"chat-denied\",\"Ban permission disabled for moderators\");return;\\\\n    \
+        \         }\\\\n-            var targetText=pieces[1].Trim().TrimStart(\\\\\\'#\\\\\\');\\\\n-         \
+        \   var roster=GameBridge.ReadConnectedPlayers().Where(p=>!p.IsLocal&&p.ClientId>=0).ToArray();\\\\n-  \
+        \          PlayerIdentity? target=null;\\\\n-            if(int.TryParse(targetText,out int id))target=roster.FirstOrDefault(p=>p.ClientId==id);\\\
+        \\n-            else{\\\\n-                var matches=roster.Where(p=>string.Equals(p.Name,targetText,StringComparison.OrdinalIgnoreCase)).ToArray();\\\
+        \\n-                if(matches.Length==1)target=matches[0];\\\\n-            }\\\\n-            if(target\
+        \ is null){Status(\"chat-target-missing\",\"Target not found or name ambiguous; use numeric Client ID\"\
+        );return;}\\\\n+            if(!Pregame()||!int.TryParse((Member(sender,\"OwnerId\")??Member(sender,\"ownerId\"\
+        ))?.ToString(),out int ownerId)||!Connected(ownerId,friendCode)){Status(\"chat-denied\",\"Connected moderator\
+        \ and hosted lobby required\");return;}\\\\n+            var target=ResolveTarget(arg);\\\\n+          \
+        \  if(target is null||target.ClientId==ownerId||Trusted(settings,target.FriendCode)){Status(\"chat-target-missing\"\
+        ,\"Target missing, ambiguous or protected; use color:red, name:ExactName or #clientID\");return;}\\\\n+\
+        \            if(!Cooldown(friendCode,\"moderation\",2)){Status(\"chat-rate-limit\",\"Wait before another\
+        \ moderation action\");return;}\\\\n             bool sent=action==\"ban\"?GameBridge.Ban(target):GameBridge.Kick(target);\\\
+        \\n             HostExtras.ModerationNotice(action,target,\"Approved delegated moderator action\",sent);\\\
+        \\n             Status(sent?\"chat-requested\":\"chat-error\",action+\" requested for \"+target.Name+\"\
+        \ by authorized moderator\");\\\\n--- a/LobbyGuardian/Plugin/ClientFeatures.cs\\\\n+++ b/LobbyGuardian/Plugin/ClientFeatures.cs\\\
+        \\n@@ -263,24 +263,14 @@\\\\n             \"No automatic reconnect for \" + reason);\\\\n     }\\\\n \\\\\
+        n-    private static long _settingsRefreshAt;\\\\n-    private static JsonElement _settingsSnapshot;\\\\\
+        n     private static bool ReadSetting(string key)\\\\n     {\\\\n         try\\\\n         {\\\\n-     \
+        \       long now=Environment.TickCount64;\\\\n-            if(now>=_settingsRefreshAt){\\\\n-          \
+        \      _settingsRefreshAt=now+200;\\\\n-                _settingsSnapshot=default;\\\\n-               \
+        \ var file=PathTo(\"LobbyGuardian-client-settings.json\");\\\\n-                if(File.Exists(file)){\\\
+        \\n-                    using var doc=JsonDocument.Parse(File.ReadAllText(file));\\\\n-                \
+        \    _settingsSnapshot=doc.RootElement.Clone();\\\\n-                }\\\\n-            }\\\\n-        \
+        \    return _settingsSnapshot.ValueKind==JsonValueKind.Object&&\\\\n-                _settingsSnapshot.TryGetProperty(key,out\
+        \ var value)&&value.ValueKind==JsonValueKind.True;\\\\n+            var file = PathTo(\"LobbyGuardian-client-settings.json\"\
+        );\\\\n+            if (!File.Exists(file)) return false;\\\\n+            using var doc = JsonDocument.Parse(File.ReadAllText(file));\\\
+        \\n+            return doc.RootElement.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.True;\\\
+        \\n         }\\\\n         catch { return false; }\\\\n     }\\\\n@@ -310,7 +300,7 @@\\\\n         if (_directory.Length\
+        \ == 0) return;\\\\n         var now = DateTimeOffset.UtcNow;\\\\n         if (now < _nextTick) return;\\\
+        \\n-        _nextTick = now.AddMilliseconds(250);\\\\n+        _nextTick = now.AddMilliseconds(200);\\\\\
+        n         if (!_firstTick) {\\\\n             _firstTick = true;\\\\n             Status(\"features-active\"\
+        , \"Game update callback active; vote and reconnect features awaiting events\");\\\\n@@ -334,7 +324,7 @@\\\
+        \\n             if (lobbyNow!=_lastLobbyState || now >= _nextRoster)\\\\n             {\\\\n           \
+        \      _lastLobbyState=lobbyNow;\\\\n-                _nextRoster = now.AddSeconds(3);\\\\n+           \
+        \     _nextRoster = now.AddSeconds(2);\\\\n                 WriteRoster();\\\\n             }\\\\n     \
+        \        LocalEffects.Tick(lobbyNow, ReadSetting(\"LocalLobbyNoClip\"),\\\\n--- a/LobbyGuardian/Plugin/ClientSpatialTelemetry.cs\\\
+        \\n+++ b/LobbyGuardian/Plugin/ClientSpatialTelemetry.cs\\\\n@@ -14,12 +14,11 @@\\\\n {\\\\n     private\
+        \ const BindingFlags F=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;\\\
+        \\n     private static DateTimeOffset _next=DateTimeOffset.MinValue;\\\\n-    private static Type? _cachedSpatialPlayerType;\\\
+        \\n     private static object? Member(object? root,string key)\\\\n     {\\\\n         if(root is null)return\
+        \ null;\\\\n         try{var t=root is Type tt?tt:root.GetType();var target=root is Type?null:root;\\\\\
+        n-            return GameBridge.ReadMember(t,target,key,F);}\\\\n+            return t.GetProperty(key,F)?.GetValue(target)??t.GetField(key,F)?.GetValue(target);}\\\
+        \\n         catch{return null;}\\\\n     }\\\\n     private static IEnumerable<object> Items(object? source)\\\
+        \\n@@ -43,14 +42,14 @@\\\\n     internal static void Tick()\\\\n     {\\\\n         if(DateTimeOffset.UtcNow<_next)return;\\\
+        \\n-        _next=DateTimeOffset.UtcNow.AddSeconds(4);\\\\n+        _next=DateTimeOffset.UtcNow.AddSeconds(1);\\\
+        \\n         try{\\\\n-            var type=_cachedSpatialPlayerType ??= AppDomain.CurrentDomain.GetAssemblies()\\\
+        \\n+            var type=AppDomain.CurrentDomain.GetAssemblies()\\\\n                 .Select(x=>x.GetType(\"\
+        PlayerControl\",false)).FirstOrDefault(x=>x is not null);\\\\n             var state=Member(GameBridge.Client,\"\
+        GameState\")?.ToString()??\"Unavailable\";\\\\n             bool lobby=state.Equals(\"Joined\",StringComparison.OrdinalIgnoreCase)||state.Equals(\"\
+        Lobby\",StringComparison.OrdinalIgnoreCase);\\\\n             var collection=lobby?Member(type,\"AllPlayerControls\"\
+        ):null;\\\\n-            var local=lobby?Member(type,\"LocalPlayer\"):null;\\\\n+            var local=Member(type,\"\
+        LocalPlayer\");\\\\n             var localPos=Member(Member(local,\"transform\"),\"position\");\\\\n   \
+        \          float? originX=Number(Member(localPos,\"x\")),originY=Number(Member(localPos,\"y\"));\\\\n  \
+        \           var result=new List<object>();\\\\n--- a/LobbyGuardian/Plugin/GameBridge.cs\\\\n+++ b/LobbyGuardian/Plugin/GameBridge.cs\\\
+        \\n@@ -12,9 +12,7 @@\\\\n {\\\\n     private const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic\
+        \ | BindingFlags.Instance | BindingFlags.Static;\\\\n \\\\n-    // Cache only resolved metadata; the live\
+        \ singleton is still read on every call.\\\\n-    private static Type? _cachedClientType;\\\\n-    public\
+        \ static Type? ClientType => _cachedClientType ??= AppDomain.CurrentDomain.GetAssemblies()\\\\n+    public\
+        \ static Type? ClientType => AppDomain.CurrentDomain.GetAssemblies()\\\\n         .Select(a => a.GetType(\"\
+        InnerNet.AmongUsClient\", false) ?? a.GetType(\"AmongUsClient\", false))\\\\n         .FirstOrDefault(t\
+        \ => t is not null);\\\\n \\\\n@@ -22,17 +20,8 @@\\\\n         m.Name == \"OnPlayerJoined\" && m.GetParameters().Length\
+        \ == 1 &&\\\\n         m.GetParameters()[0].ParameterType.Name.Contains(\"ClientData\", StringComparison.Ordinal));\\\
+        \\n \\\\n-    // Cache reflection metadata only, never live Unity objects or their values.\\\\n-    private\
+        \ static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type, string, BindingFlags), Lazy<PropertyInfo?>>\
+        \ MemberProperties = new();\\\\n-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(Type,\
+        \ string, BindingFlags), Lazy<FieldInfo?>> MemberFields = new();\\\\n     internal static object? ReadMember(Type\
+        \ type, object? receiver, string name, BindingFlags flags)\\\\n-    {\\\\n-        var key = (type, name,\
+        \ flags);\\\\n-        var property = MemberProperties.GetOrAdd(key, static k => new Lazy<PropertyInfo?>(()\
+        \ => k.Item1.GetProperty(k.Item2, k.Item3))).Value;\\\\n-        var value = property?.GetValue(receiver);\\\
+        \\n-        if (value is not null) return value;\\\\n-        return MemberFields.GetOrAdd(key, static k\
+        \ => new Lazy<FieldInfo?>(() => k.Item1.GetField(k.Item2, k.Item3))).Value?.GetValue(receiver);\\\\n-  \
+        \  }\\\\n+        => type.GetProperty(name, flags)?.GetValue(receiver) ?? type.GetField(name, flags)?.GetValue(receiver);\\\
+        \\n     public static object? Client\\\\n     {\\\\n         get\\\\n@@ -40,7 +29,8 @@\\\\n            \
+        \ try\\\\n             {\\\\n                 var t = ClientType;\\\\n-                return t is null\
+        \ ? null : ReadMember(t, null, \"Instance\", All);\\\\n+                return t?.GetProperty(\"Instance\"\
+        , All)?.GetValue(null)\\\\n+                    ?? t?.GetField(\"Instance\", All)?.GetValue(null);\\\\n\
+        \             }\\\\n             catch { return null; }\\\\n         }\\\\n@@ -58,6 +48,7 @@\\\\n      \
+        \   p.Puid = Str(data, \"Puid\", \"PUID\", \"ProductUserId\", \"HashedPuid\", \"Character.Data.Puid\");\\\
+        \\n         p.Platform = Str(data, \"Platform\", \"PlatformData.Platform\");\\\\n         p.Level = Int(data,\
+        \ \"PlayerLevel\", \"Level\", \"Character.Data.PlayerLevel\");\\\\n+        p.ColorId = Int(data, \"Character.Data.DefaultOutfit.ColorId\"\
+        , \"Character.Data.ColorId\");\\\\n         var client = Client;\\\\n         var localId = Int(client,\
+        \ \"ClientId\");\\\\n         p.IsLocal = localId.HasValue && p.ClientId == localId.Value;\\\\n@@ -159,6\
+        \ +150,7 @@\\\\n                 }\\\\n                 else if (string.IsNullOrWhiteSpace(item.Name) &&\
+        \ !string.IsNullOrWhiteSpace(name))\\\\n                     item.Name = name;\\\\n+                item.ColorId\
+        \ ??= Int(pc, \"Data.DefaultOutfit.ColorId\", \"Data.ColorId\");\\\\n                 if (string.IsNullOrWhiteSpace(item.FriendCode))\\\
+        \\n                     item.FriendCode = Str(pc, \"Data.FriendCode\");\\\\n                 if (string.IsNullOrWhiteSpace(item.Puid))\\\
+        \\n@@ -218,7 +210,7 @@\\\\n             {\\\\n                 if (root is null) return null;\\\\n     \
+        \            var t = root.GetType();\\\\n-                root = ReadMember(t, root, member, All);\\\\n+\
+        \                root = t.GetProperty(member, All)?.GetValue(root) ?? t.GetField(member, All)?.GetValue(root);\\\
+        \\n             }\\\\n             return root;\\\\n         }\\\\n--- a/LobbyGuardian/Plugin/GuardianRuntimeHealth.cs\\\
+        \\n+++ b/LobbyGuardian/Plugin/GuardianRuntimeHealth.cs\\\\n@@ -15,7 +15,7 @@\\\\n         }\\\\n     }\\\
+        \\n     internal static void Heartbeat(){\\\\n-        var now=DateTimeOffset.UtcNow;if(now<next)return;next=now.AddSeconds(15);\\\
+        \\n+        var now=DateTimeOffset.UtcNow;if(now<next)return;next=now.AddSeconds(5);\\\\n         try{\\\
+        \\n             var target=Path.Combine(Paths.ConfigPath,\"LobbyGuardian-runtime-health.json\");\\\\n  \
+        \           var tmp=target+\".tmp\";\\\\n--- a/LobbyGuardian/Plugin/LobbyAppearance.cs\\\\n+++ b/LobbyGuardian/Plugin/LobbyAppearance.cs\\\
+        \\n@@ -119,7 +119,7 @@\\\\n             int I(string key,int def)=>x.TryGetProperty(key,out var v)&&v.TryGetInt32(out\
+        \ int i)?i:def;\\\\n             n.SpoofPlatform=B(\"SpoofPlatform\");n.Platform=S(\"Platform\",\"Android\"\
+        );\\\\n             n.SpoofLevel=B(\"SpoofLevel\");n.Level=Math.Clamp(I(\"Level\",1),1,1000);\\\\n-    \
+        \        n.Clones=B(\"Clones\");n.CloneCount=Math.Clamp(I(\"CloneCount\",6),2,20);n.Formation=S(\"Formation\"\
+        ,\"Circle\");\\\\n+            n.Clones=false;n.CloneCount=Math.Clamp(I(\"CloneCount\",6),2,20);n.Formation=S(\"\
+        Formation\",\"Circle\");\\\\n             n.DarkChat=B(\"DarkChat\");n.RandomizeNameOnRejoin=B(\"RandomizeNameOnRejoin\"\
+        );\\\\n             n.StyledChat=B(\"StyledChat\");n.ChatColor=S(\"ChatColor\",\"FFFFFF\").TrimStart(\\\\\
+        \\'#\\\\\\').ToUpperInvariant();\\\\n             if(n.ChatColor.Length!=6||!n.ChatColor.All(Uri.IsHexDigit))n.ChatColor=\"\
+        FFFFFF\";\\\\n@@ -1265,7 +1265,7 @@\\\\n             // v4.3.14: ONLY independent SpriteRenderer art. Never\
+        \ instantiate\\\\n             // PlayerControl or call the network dummy spawning pipeline.\\\\n      \
+        \       TickShared();\\\\n-            TickClones();\\\\n+            if(_clones.Count>0)ClearClones();\\\
+        \\n             TickDarkChat();StyledMessage();\\\\n         }catch(Exception e){Report(\"appearance-error\"\
+        ,e.GetType().Name);}\\\\n     }\\\\n--- a/LobbyGuardian/Plugin/LobbyChatCommands.cs\\\\n+++ b/LobbyGuardian/Plugin/LobbyChatCommands.cs\\\
+        \\n@@ -85,11 +85,14 @@\\\\n                     Notice(\"Role request checked; see Utility+ diagnostics\"\
+        );\\\\n                     return true;\\\\n                 }\\\\n+                case \"/b\":\\\\n+\
+        \                case \"/k\":\\\\n                 case \"/ban\":\\\\n                 case \"/kick\": {\\\
+        \\n+                    head=head==\"/b\"?\"/ban\":head==\"/k\"?\"/kick\":head;\\\\n                   \
+        \  if(!CanAct(head))return true;\\\\n-                    if(arg.Length==0){Notice(\"Use \"+head+\" <player\
+        \ name or #clientID>\");return true;}\\\\n-                    var target=Find(arg);\\\\n+             \
+        \       if(arg.Length==0){Notice(\"Use \"+head+\" <color, name or #clientID>\");return true;}\\\\n+    \
+        \                var target=ChatModerators.ResolveTarget(arg);\\\\n                     if(target is null){Notice(\"\
+        No unique player matched: \"+arg);return true;}\\\\n                     bool ok=head==\"/ban\"?GameBridge.Ban(target):GameBridge.Kick(target);\\\
+        \\n                     Notice((ok?\"Host \"+head[1..]+\" requested for \":\"Could not \"+head[1..]+\" \"\
+        )+target.Name);\\\\n--- a/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\\\\n+++ b/LobbyGuardian/Plugin/LobbyGuardianPlugin.cs\\\
+        \\n@@ -435,17 +435,14 @@\\\\n         return BauStyleAntiCheat.BeforeRpc(__instance,__0);\\\\n     }\\\\\
+        n     private static bool HostVoteGuardPrefix(int __0,int __1) => LobbyRaidGuard.IncomingVotePrefix(__0,__1);\\\
+        \\n-    private static long _nextSafetyMaintenance,_nextConnectionMaintenance,_nextRpcMaintenance;\\\\n-\
+        \    private static void ClientUpdatePostfix() {\\\\n-            PettingHand.TickLive(); ClientFeatures.Tick();\\\
+        \\n-            // Event/RPC hooks remain unchanged. Poll-only maintenance does not need every frame.\\\\\
+        n-            long now=Environment.TickCount64;\\\\n-            if(now>=_nextSafetyMaintenance){_nextSafetyMaintenance=now+250;InboundTrafficShield.Tick();}\\\
+        \\n-            if(now>=_nextConnectionMaintenance){_nextConnectionMaintenance=now+250;ConnectionBotGuard.Tick();}\\\
+        \\n-            HostResilienceShield.Tick(); BotShield.Tick();\\\\n-            if(now>=_nextRpcMaintenance){_nextRpcMaintenance=now+250;RpcAutoBanGuard.Tick();}\\\
+        \\n-            LobbyPresenceAlerts.Tick(); RapidRaidProtection.Tick();\\\\n-    }\\\\n+    private static\
+        \ void ClientUpdatePostfix() { PettingHand.TickLive(); ClientFeatures.Tick(); InboundTrafficShield.Tick();\
+        \ HostResilienceShield.Tick(); BotShield.Tick(); RpcAutoBanGuard.Tick(); ConnectionBotGuard.Tick();\\\\\
+        n+            \\\\n+            \\\\n+            \\\\n+            \\\\n+            LobbyPresenceAlerts.Tick();\\\
+        \\n+            RapidRaidProtection.Tick();\\\\n+        }\\\\n     private static void ClientGameJoinedPostfix()\
+        \ { MatchTransitionGuard.Reset(); ClientFeatures.OnGameJoined(); }\\\\n     private static void ClientDisconnectedPostfix()\
+        \ {\\\\n         MatchTransitionGuard.Reset();\\\\n--- a/LobbyGuardian/Plugin/LobbyNameBadges.cs\\\\n+++\
+        \ b/LobbyGuardian/Plugin/LobbyNameBadges.cs\\\\n@@ -16,7 +16,6 @@\\\\n     private const BindingFlags Flags\
+        \ = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;\\\\n   \
+        \  private static DateTimeOffset _next = DateTimeOffset.MinValue;\\\\n     private static DateTimeOffset\
+        \ _nextBadgeStatus = DateTimeOffset.MinValue;\\\\n-    private static Type? _cachedBadgePlayerType;\\\\\
+        n     private static string FileAt(string name) => Path.Combine(Paths.ConfigPath, name);\\\\n     private\
+        \ static object? Get(object? obj, string name)\\\\n     {\\\\n@@ -68,7 +67,7 @@\\\\n     {\\\\n        \
+        \ var now=DateTimeOffset.UtcNow;\\\\n         if(now<_next)return;\\\\n-        _next=now.AddMilliseconds(750);\\\
+        \\n+        _next=now.AddMilliseconds(350);\\\\n         try {\\\\n             var client=GameBridge.Client;\\\
+        \\n             var all=Get(client,\"allClients\")??Get(client,\"AllClients\");\\\\n@@ -81,7 +80,7 @@\\\\\
+        n                 var character=Get(record,\"Character\")??Get(record,\"character\");\\\\n             \
+        \    if(character is not null)characters.Add((character,GameBridge.Read(record)));\\\\n             }\\\\\
+        n-            var pcType=_cachedBadgePlayerType ??= AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(\"\
+        PlayerControl\",false))\\\\n+            var pcType=AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(\"\
+        PlayerControl\",false))\\\\n                 .FirstOrDefault(t=>t is not null);\\\\n             var controls=Get(pcType,\"\
+        AllPlayerControls\");\\\\n             foreach(var player in Enumerate(controls)) {\\\\n--- a/LobbyGuardian/Plugin/LobbyPresenceAlerts.cs\\\
+        \\n+++ b/LobbyGuardian/Plugin/LobbyPresenceAlerts.cs\\\\n@@ -120,7 +120,7 @@\\\\n     {\\\\n         var\
+        \ now=DateTimeOffset.UtcNow;\\\\n         if(now<_next)return;\\\\n-        _next=now.AddMilliseconds(850);\\\
+        \\n+        _next=now.AddMilliseconds(420);\\\\n         try\\\\n         {\\\\n             var client=GameBridge.Client;\\\
+        \\n--- a/LobbyGuardian/Plugin/LocalEffects.cs\\\\n+++ b/LobbyGuardian/Plugin/LocalEffects.cs\\\\n@@ -64,10\
+        \ +64,9 @@\\\\n         } catch {return false;}\\\\n     }\\\\n \\\\n-    private static Type? _cachedPlayerType;\\\
+        \\n     private static object? LocalPlayer()\\\\n     {\\\\n-        var type = _cachedPlayerType ??= AppDomain.CurrentDomain.GetAssemblies()\\\
+        \\n+        var type=AppDomain.CurrentDomain.GetAssemblies()\\\\n             .Select(x=>x.GetType(\"PlayerControl\"\
+        ,false)).FirstOrDefault(t=>t is not null);\\\\n         return type is null ? null : Get(type,\"LocalPlayer\"\
+        );\\\\n     }\\\\n@@ -78,7 +77,6 @@\\\\n         // The existing collider logic remains unchanged. Visual\
+        \ changes are now managed separately.\\\\n         requestedInvisibility=false;requestedPetHide=false;\\\
+        \\n         bool nc=inLobby && requestedNoclip, inv=inLobby && requestedInvisibility, pet=inLobby && requestedPetHide;\\\
+        \\n-        if(!nc&&!inv&&!pet&&!_noclip&&!_invisible&&!_hidePet)return;\\\\n         var player=LocalPlayer();\\\
+        \\n         // The lobby may create the local character AFTER the setting was toggled.\\\\n         // Never\
+        \ mark an unavailable renderer as permanently applied; retry when it\\\\n@@ -93,8 +91,7 @@\\\\n        \
+        \     (!inv || (_previousCosmetics.HasValue && ReadBool(_cosmeticGameObject,\"activeSelf\")==false) ||\\\
+        \\n                      (_previousBodyRenderer.HasValue && ReadBool(_bodyRenderer,\"enabled\")==false))\
+        \ &&\\\\n             (!nc || _collider is not null) && (!pet || _petGameObject is not null))return;\\\\\
+        n-        // Restore a mod-owned lobby collider immediately when leaving pregame.\\\\n-        if(DateTimeOffset.UtcNow<_retryAt\
+        \ && !( _noclip && !nc))return;\\\\n+        if(DateTimeOffset.UtcNow<_retryAt)return;\\\\n         _retryAt=DateTimeOffset.UtcNow.AddMilliseconds(600);\\\
+        \\n         string status=\"\";\\\\n         if(nc!=_noclip)\\\\n--- a/LobbyGuardian/Plugin/ModerationRules.cs\\\
+        \\n+++ b/LobbyGuardian/Plugin/ModerationRules.cs\\\\n@@ -13,6 +13,7 @@\\\\n     public string Puid { get;\
+        \ set; } = \"\";\\\\n     public string Platform { get; set; } = \"\";\\\\n     public int? Level { get;\
+        \ set; }\\\\n+    public int? ColorId { get; set; }\\\\n     public bool IsLocal { get; set; }\\\\n    \
+        \ public bool IsHost { get; set; }\\\\n }\\\\n--- a/LobbyGuardian/Plugin/RapidRaidProtection.cs\\\\n+++\
+        \ b/LobbyGuardian/Plugin/RapidRaidProtection.cs\\\\n@@ -201,7 +201,7 @@\\\\n         try{\\\\n         \
+        \    var now=DateTimeOffset.UtcNow;LoadSettings(now);\\\\n             if(now<_nextPoll)return;\\\\n-  \
+        \          _nextPoll=now.AddMilliseconds(650);\\\\n+            _nextPoll=now.AddMilliseconds(300);\\\\\
+        n             if(!IsHostedLobby()){\\\\n                 if(_room!=0)Reset(0);\\\\n                 Status(now);return;\\\
+        \\n--- a/LobbyGuardian/Plugin/UtilityFull.cs\\\\n+++ b/LobbyGuardian/Plugin/UtilityFull.cs\\\\n@@ -48,12\
+        \ +48,7 @@\\\\n         var p=obj.GetType().GetProperty(name,F);if(p?.CanWrite==true&&p.PropertyType==typeof(bool)){p.SetValue(obj,value);return\
+        \ true;}\\\\n         var f=obj.GetType().GetField(name,F);if(f?.FieldType==typeof(bool)){f.SetValue(obj,value);return\
+        \ true;}\\\\n     }catch{}return false;}\\\\n-    private static readonly Dictionary<string,Type> _resolvedTypes=new();\\\
+        \\n-    private static Type? FindType(string name){\\\\n-        if(_resolvedTypes.TryGetValue(name,out\
+        \ var cached))return cached;\\\\n-        var found=AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(name,false)).FirstOrDefault(t=>t!=null);\\\
+        \\n-        if(found!=null)_resolvedTypes[name]=found;return found;\\\\n-    }\\\\n+    private static Type?\
+        \ FindType(string name)=>AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(name,false)).FirstOrDefault(t=>t!=null);\\\
+        \\n     private static IEnumerable<object> All(object? c)\\\\n     {\\\\n         if(c==null)yield break;\\\
+        \\n@@ -101,7 +96,6 @@\\\\n             GuardianRuntimeHealth.Run(\"SimpleHost\",SimpleHostTick);\\\\n  \
+        \           if(Option(\"AlwaysChat\"))GuardianRuntimeHealth.Run(\"AlwaysChat\",AlwaysChat);\\\\n       \
+        \      else GuardianRuntimeHealth.Run(\"ChatLayoutRestore\",RestoreChatLayout);\\\\n-            if(Option(\"\
+        HostStartButtonVisible\",true))GuardianRuntimeHealth.Run(\"HostStartUI\",ShowHostStartButton);\\\\n    \
+        \         if(Option(\"SeeGhosts\"))GuardianRuntimeHealth.Run(\"SeeGhosts\",SeeGhosts);\\\\n            \
+        \ else GuardianRuntimeHealth.Run(\"GhostVisualRestore\",RestoreGhostVisuals);\\\\n             if(Option(\"\
+        ShowReportButton\"))GuardianRuntimeHealth.Run(\"ReportButton\",ShowReportButton);\\\\n@@ -716,7 +710,7 @@\\\
+        \\n             _liveStartManager=null;_liveStartRoom=\"\";_liveStartSeen=0;return;\\\\n         }\\\\n\
+        \         if(manager!=null){_liveStartManager=manager;_liveStartRoom=StartRoom();_liveStartSeen=Environment.TickCount64;}\\\
+        \\n-        if(Option(\"HostStartButtonVisible\",true))ShowHostStartButton(manager);\\\\n+        if(Option(\"\
+        HostStartButtonVisible\"))ShowHostStartButton(manager);\\\\n     }\\\\n     internal static void OnChatSetVisible(object\
+        \ chat,bool visible)\\\\n     {\\\\n--- a/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        \\n+++ b/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\\n@@ -1517,7 +1517,7\
+        \ @@\\\\n             logo.setGravity(Gravity.CENTER_VERTICAL);\\\\n             top.addView(logo,new LinearLayout.LayoutParams(0,dp(activity,32),1));\\\
+        \\n             TextView version = new TextView(activity);\\\\n-            version.setText(\"v4.3.96\"\
+        );\\\\n+            version.setText(\"v4.3.97\");\\\\n             version.setTextColor(MUTED);\\\\n   \
+        \          version.setTextSize(10);\\\\n             top.addView(version);\\\\n@@ -1657,7 +1657,7 @@\\\\\
+        n             section(activity,protections,\"Host anti-abuse & warnings\",\"\");\\\\n             actionButton(activity,protections,\"\
+        Safe mode • stop automation\",v->safeMode(activity));\\\\n             section(activity,chat,\"Chat tools\"\
+        ,\"\");\\\\n-            section(activity,visuals,\"Clone formations (local)\",\"\");\\\\n+            section(activity,visuals,\"\
+        Shared clones\",\"\");\\\\n             GuardianUnifiedExtras.addVisibility(activity,account);\\\\n    \
+        \         GuardianUnifiedExtras.addSpoof(activity,account);\\\\n             section(activity,account,\"\
+        Session\",\"\");\\\\n@@ -2047,17 +2047,6 @@\\\\n             \\\\n             \\\\n             \\\\n-\
+        \            section(activity,visuals,\"Clone formations\",\"Decorations visible on your device only. Automatically\
+        \ removed when a match starts.\");\\\\n-  appearanceToggle(activity,visuals,identity,\"Clones\",\"Show decorative\
+        \ clones\");\\\\n-  appearanceChoice(activity,visuals,\"Formation\",new String[]{\"Circle\",\"Heart\",\"\
+        Orbit\"},\\\\n-      identity.optString(\"Formation\",\"Circle\"),value->setAppearance(activity,\"Formation\"\
+        ,value));\\\\n-  appearanceChoice(activity,visuals,\"Number of clones\",new String[]{\"2\",\"4\",\"6\",\"\
+        8\",\"10\",\"12\",\"16\",\"20\"},\\\\n-      String.valueOf(Math.min(20,Math.max(2,identity.optInt(\"CloneCount\"\
+        ,6)))),value->setAppearance(activity,\"CloneCount\",Integer.parseInt(value)));\\\\n-  actionButton(activity,visuals,\"\
+        Heart formation · 20 clones\",v->{\\\\n-      setAppearance(activity,\"CloneCount\",20);setAppearance(activity,\"\
+        Formation\",\"Heart\");\\\\n-      setAppearance(activity,\"Clones\",true);\\\\n-      Toast.makeText(activity,\"\
+        Heart enabled locally\",Toast.LENGTH_SHORT).show();\\\\n-  });\\\\n           actionButton(activity,visuals,\"\
+        Shared clones\",v->showSharedClones(activity));\\\\n           actionButton(activity,visuals,\"Remove all\
+        \ clones\",v->{setAppearance(activity,\"Clones\",false);sharedCloneCommand(activity,\"clear\",\"Heart\"\
+        ,0);});\\\\n           actionButton(activity,visuals,\"Shared clone status\",v->{\\\\n@@ -2155,8 +2144,12\
+        \ @@\\\\n                     Toast.makeText(activity,\"Trusted moderators saved\",Toast.LENGTH_SHORT).show();\\\
+        \\n                 }catch(Exception e){Toast.makeText(activity,\"Could not save moderator permissions\"\
+        ,Toast.LENGTH_LONG).show();}\\\\n             });\\\\n-            section(activity,mods,\"Available commands\"\
+        ,\"/cmd lg kick 17 · /cmd lg ban 17 · /cmd lg tempban #17 5 · /cmd lg settings speed 1.25 · /cmd lg start\
+        \ · /cmd lg clones heart 20 · /cmd lg clones circle 12 · /cmd lg clones off · /cmd lg remove lobby · /cmd\
+        \ lg restore lobby (private rooms only). Extended commands use visible normal chat as !lg; type !lg clones\
+        \ heart 20 or !lg remove lobby directly if the slash draft cannot be updated. Host must enable the relevant\
+        \ permission and save.\");\\\\n-\\\\n+            section(activity,mods,\"Quick moderator commands\",\"\
+        !k red · !b blue · !tb green 5 · !speed 1.25 · !voting 60 · !discussion 30 · !s · !lg clones heart 12 ·\
+        \ !lg clones off · !lg help. Type directly in ordinary chat. Names and #client IDs still work. Use name:Red\
+        \ to target a player named Red instead of the color. Host permissions apply; commands are visible to the\
+        \ room.\");\\\\n+            actionButton(activity,mods,\"Copy short command list\",v->{\\\\n+         \
+        \       android.content.ClipboardManager cm=(android.content.ClipboardManager)activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);\\\
+        \\n+                if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText(\"Moderator commands\"\
+        ,\"!k red\\\\\\\\n!b blue\\\\\\\\n!tb green 5\\\\\\\\n!speed 1.25\\\\\\\\n!voting 60\\\\\\\\n!discussion\
+        \ 30\\\\\\\\n!s\\\\\\\\n!lg clones heart 12\\\\\\\\n!lg clones off\\\\\\\\n!lg help\"));\\\\n+         \
+        \       Toast.makeText(activity,\"Commands copied\",Toast.LENGTH_SHORT).show();\\\\n+            });\\\\\
+        n             actionButton(activity,mods,\"Last moderator result\",v->{\\\\n                 String message=\"\
+        No moderator request recorded yet.\";\\\\n                 try{JSONObject result=new JSONObject(read(config(\"\
+        LobbyGuardian-moderator-status.json\"),5000));\\\\n\\'); patch_file=Path(f.name)\\ntry:\\n    subprocess.run([\\\
+        'git\\',\\'apply\\',\\'--check\\',str(patch_file)],check=True)\\n    subprocess.run([\\'git\\',\\'apply\\\
+        ',str(patch_file)],check=True)\\nfinally:\\n    patch_file.unlink(missing_ok=True)\\n\\nwith tempfile.NamedTemporaryFile(mode=\"\
+        w\",encoding=\"utf8\",suffix=\".patch\",delete=False) as f:\\n    f.write(\\'--- a/LobbyGuardian/Plugin/ChatModerators.cs\\\
+        \\n+++ b/LobbyGuardian/Plugin/ChatModerators.cs\\\\n@@ -47,7 +47,7 @@\\\\n         if(!r.TryGetProperty(\"\
+        moderatorCode\",out var code))return true; // existing local host UI\\\\n         try{\\\\n            \
+        \ if(!Pregame()||Room()==\"\"||!r.TryGetProperty(\"gameId\",out var room)||room.ToString()!=Room())return\
+        \ false;\\\\n-            if(permission==\"AllowLobbyLayout\"&&!PrivateRoom())return false;\\\\n+      \
+        \      if((permission==\"AllowLobbyLayout\"||permission==\"AllowSharedClones\")&&!PrivateRoom())return false;\\\
+        \\n             if(!r.TryGetProperty(\"moderatorId\",out var id)||!id.TryGetInt32(out int clientId))return\
+        \ false;\\\\n             string friend=code.GetString()??\"\";\\\\n             if(friend.Length==0||!Connected(clientId,friend))return\
+        \ false;\\\\n@@ -91,11 +91,11 @@\\\\n         if(!byName&&int.TryParse(query,out int bare))return roster.FirstOrDefault(p=>p.ClientId==bare);\\\
+        \\n         return null;\\\\n     }\\\\n-    private static string Alias(string action)=>action switch {\"\
+        k\"=>\"kick\",\"b\"=>\"ban\",\"tb\"=>\"tempban\",\"s\"=>\"start\",\"h\"=>\"help\",\"sharedclones\"=>\"clones\"\
+        ,_=>action};\\\\n-    private static bool ShortSetting(string action)=>action is \"speed\" or \"voting\"\
+        \ or \"discussion\" or \"crewvision\" or \"impvision\" or \"killcooldown\" or \"emergencycooldown\" or \"\
+        common\" or \"long\" or \"short\";\\\\n+    private static string Alias(string action)=>action switch {\"\
+        k\"=>\"kick\",\"b\"=>\"ban\",\"tb\"=>\"tempban\",\"s\"=>\"start\",\"h\"=>\"help\",\"sharedclones\" or \"\
+        clone\" or \"c\" or \"clearclones\"=>\"clones\",\"vote\"=>\"voting\",\"discuss\"=>\"discussion\",\"imps\"\
+        =>\"impostors\",\"kc\"=>\"killcooldown\",\"kd\"=>\"killdistance\",\"ec\"=>\"emergencycooldown\",\"meetings\"\
+        =>\"emergencycount\",\"rolerate\"=>\"rolerate\",_=>action};\\\\n+    private static bool ShortSetting(string\
+        \ action)=>action is \"speed\" or \"voting\" or \"discussion\" or \"crewvision\" or \"impvision\" or \"\
+        killcooldown\" or \"emergencycooldown\" or \"common\" or \"long\" or \"short\" or \"players\" or \"impostors\"\
+        \ or \"killdistance\" or \"emergencycount\";\\\\n     private static string Payload(string raw)=>raw.StartsWith(\"\
+        /cmd lg \",StringComparison.OrdinalIgnoreCase)?raw[8..]:raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase)?raw[4..]:raw.StartsWith(\\\
+        \\\\'!\\\\\\')||raw.StartsWith(\\\\\\'/\\\\\\')?raw[1..]:\"\";\\\\n     private static bool ExtraCommand(string\
+        \ action,string arg,object sender,string friendCode,JsonElement settings){\\\\n-        string permission=action\
+        \ is \"destroy\" or \"remove\" or \"restore\"?\"AllowLobbyLayout\":action==\"start\"?\"AllowStart\":action==\"\
+        clones\"?\"AllowSharedClones\":action==\"settings\"?\"AllowSettings\":action==\"tempban\"?\"AllowTempban\"\
+        :\"\";\\\\n+        string permission=action is \"destroy\" or \"remove\" or \"restore\"?\"AllowLobbyLayout\"\
+        :action==\"start\"?\"AllowStart\":action==\"clones\"?\"AllowSharedClones\":(action==\"settings\"||action==\"\
+        rolerate\")?\"AllowSettings\":action==\"tempban\"?\"AllowTempban\":\"\";\\\\n         if(permission==\"\"\
+        )return false;\\\\n         if(!Enabled(settings,permission)){Status(\"chat-denied\",permission+\" is disabled\"\
+        );return true;}\\\\n         if(!Pregame()||Room()==\"\"||Room()==\"0\"||Room()==\"-1\"){Status(\"chat-denied\"\
+        ,\"Current hosted pregame required\");return true;}\\\\n@@ -115,6 +115,13 @@\\\\n             if(arg.Length!=0&&arg!=\"\
+        match\"){Status(\"chat-invalid\",\"Use start or start match\");return true;}\\\\n             if(!Cooldown(friendCode,\"\
+        start\",10)){Status(\"chat-rate-limit\",\"Wait before another start request\");return true;}\\\\n      \
+        \       queued=Queue(\"LobbyGuardian-utility-full-command.json\",new{type=\"normal-host-start\",gameId,moderatorId,moderatorCode,createdUtcMs});\\\
+        \\n+        }else if(action==\"rolerate\"){\\\\n+            string[] args=arg.Split(\\\\\\' \\\\\\',StringSplitOptions.RemoveEmptyEntries);\\\
+        \\n+            string[] roles={\"Scientist\",\"Engineer\",\"GuardianAngel\",\"Shapeshifter\",\"Tracker\"\
+        ,\"Noisemaker\",\"Phantom\",\"Detective\",\"Viper\"};\\\\n+            string? role=args.Length==3?roles.FirstOrDefault(x=>x.Equals(args[0],StringComparison.OrdinalIgnoreCase)):null;\\\
+        \\n+            if(role==null||!int.TryParse(args[1],out int count)||!int.TryParse(args[2],out int chance)||count<0||count>3||chance<0||chance>100||chance%10!=0){Status(\"\
+        chat-invalid\",\"Use /rolerate Engineer 1 100 (count 0-3, chance 0-100 by 10)\");return true;}\\\\n+   \
+        \         if(!Cooldown(friendCode,\"settings\",5)){Status(\"chat-rate-limit\",\"Wait before another setting\
+        \ request\");return true;}\\\\n+            queued=Queue(\"LobbyGuardian-simple-host-command.json\",new{key=\"\
+        role\",role,count,chance,gameId,moderatorId,moderatorCode,ms=createdUtcMs});\\\\n         }else if(action==\"\
+        settings\"){\\\\n             string[] args=arg.Split(\\\\\\' \\\\\\',StringSplitOptions.RemoveEmptyEntries);\\\
+        \\n             if(args.Length!=2||!double.TryParse(args[1],System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out\
+        \ double value)||!double.IsFinite(value)){Status(\"chat-invalid\",\"Use settings <key> <number>\");return\
+        \ true;}\\\\n@@ -132,6 +139,7 @@\\\\n             if(!Cooldown(friendCode,\"tempban\",10)){Status(\"chat-rate-limit\"\
+        ,\"Wait before another timed restriction\");return true;}\\\\n             queued=Queue(\"LobbyGuardian-tempban-command.json\"\
+        ,new{type=\"tempban\",gameId=roomNumber,moderatorId,moderatorCode,createdUtcMs,targetClientId,minutes,targetFriendCode=target.FriendCode});\\\
+        \\n         }else{\\\\n+            if(!PrivateRoom()){Status(\"chat-denied\",\"Delegated shared clones\
+        \ require a private custom lobby with participant agreement\");return true;}\\\\n             string[] parts=arg.Split(\\\
+        \\\\' \\\\\\',StringSplitOptions.RemoveEmptyEntries);int count=12;\\\\n             if(parts.Length<1||parts.Length>2||!(parts[0]\
+        \ is \"heart\" or \"circle\" or \"off\")||\\\\n                (parts.Length==2&&(!int.TryParse(parts[1],out\
+        \ count)||count<2||count>20))|| (parts[0]==\"off\"&&parts.Length!=1)){\\\\n@@ -151,19 +159,16 @@\\\\n  \
+        \       var parts=payload.Split(\\\\\\' \\\\\\',2,StringSplitOptions.RemoveEmptyEntries);\\\\n         if(parts.Length==0)return\
+        \ false;\\\\n         string first=parts[0].ToLowerInvariant(),action=Alias(first),arg=parts.Length==2?parts[1].Trim():\"\
+        \";\\\\n+        if(first==\"clearclones\")arg=\"off\";\\\\n         if(ShortSetting(action)){arg=action+\"\
+        \ \"+arg;action=\"settings\";}\\\\n-        bool explicitRequest=raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\"\
+        /cmd lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\\\\\\'!\\\\\\');\\\\n-        if((action\
+        \ is \"kick\" or \"ban\")&&first==action&&!raw.StartsWith(\\\\\\'!\\\\\\'))return false;\\\\n-        if(!(action\
+        \ is \"kick\" or \"ban\" or \"destroy\" or \"remove\" or \"restore\" or \"start\" or \"settings\" or \"\
+        tempban\" or \"clones\" or \"help\"))return false;\\\\n-        if((action==\"clones\"||action==\"help\"\
+        ||action==\"settings\")&&!explicitRequest&&first==action)return false;\\\\n+        if(!(action is \"kick\"\
+        \ or \"ban\" or \"destroy\" or \"remove\" or \"restore\" or \"start\" or \"settings\" or \"tempban\" or\
+        \ \"clones\" or \"help\" or \"rolerate\"))return false;\\\\n+        // Slash input uses the existing visible\
+        \ ordinary-chat compatibility transport.\\\\n+        // Do not change native chat registration or send\
+        \ custom packets.\\\\n         forwarded=\"!lg \"+action+(arg.Length>0?\" \"+arg:\"\");return true;\\\\\
+        n     }\\\\n     internal static bool IsDelegatedText(string raw){\\\\n-        if(raw.StartsWith(\"/cmd\
+        \ lg \",StringComparison.OrdinalIgnoreCase)||raw.StartsWith(\"!lg \",StringComparison.OrdinalIgnoreCase))return\
+        \ true;\\\\n-        if(!raw.StartsWith(\\\\\\'!\\\\\\')&&!raw.StartsWith(\\\\\\'/\\\\\\'))return false;\\\
+        \\n-        string first=Payload(raw).Split(\\\\\\' \\\\\\',2,StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant()??\"\
+        \";\\\\n-        string action=Alias(first);\\\\n-        return action is \"kick\" or \"ban\" or \"destroy\"\
+        \ or \"remove\" or \"restore\" or \"start\" or \"tempban\" || first==\"sharedclones\" || (raw.StartsWith(\\\
+        \\\\'!\\\\\\')&&(action is \"clones\" or \"help\" or \"settings\"||ShortSetting(action)));\\\\n+       \
+        \ if(raw.StartsWith(\"/cmd lg \",StringComparison.OrdinalIgnoreCase))return true;\\\\n+        return TryExtendedText(raw,out\
+        \ _);\\\\n     }\\\\n     internal static void OnChat(object[]? args)\\\\n     {\\\\n@@ -199,8 +204,9 @@\\\
+        \\n             string[] pieces=payload.Split(\\\\\\' \\\\\\',2,StringSplitOptions.RemoveEmptyEntries);\\\
+        \\n             string action=pieces.Length>0?Alias(pieces[0].ToLowerInvariant()):\"\";\\\\n           \
+        \  string arg=pieces.Length>1?pieces[1].Trim():\"\";\\\\n+            if(pieces.Length>0&&pieces[0].Equals(\"\
+        clearclones\",StringComparison.OrdinalIgnoreCase))arg=\"off\";\\\\n             if(ShortSetting(action)){arg=action+\"\
+        \ \"+arg;action=\"settings\";}\\\\n-            if(action==\"help\"){Status(\"chat-help\",\"Commands: !k\
+        \ red, !b blue, !tb green 5, !speed 1.25, !voting 60, !s, !lg clones heart 12, !lg help. Color/name/#ID.\
+        \ Host permissions apply; visible chat.\");return;}\\\\n+            if(action==\"help\"){Status(\"chat-help\"\
+        ,\"Commands: /k red, /b blue, /tb green 5, /clones heart 12, /clones circle 12, /clearclones, /s, /speed\
+        \ 1.25, /vote 60, /discuss 30, /players 15, /imps 2, /crewvision 1, /impvision 1.5, /kc 30, /kd 1, /meetings\
+        \ 2, /ec 15, /common 1, /long 2, /short 3, /rolerate Engineer 1 100. Host permissions apply.\");return;}\\\
+        \\n             if(ExtraCommand(action,action==\"tempban\"?arg:arg.ToLowerInvariant(),sender,friendCode,settings))return;\\\
+        \\n             if(action==\"dm\") { Status(\"dm-unavailable\",\"Private packet delivery is not implemented;\
+        \ no message was sent\");return; }\\\\n             if((action!=\"ban\"&&action!=\"kick\")||pieces.Length<2){Status(\"\
+        chat-invalid\",\"Unknown or incomplete moderator command\");return;}\\\\n--- a/LobbyGuardian/Plugin/WhisperRelay.cs\\\
+        \\n+++ b/LobbyGuardian/Plugin/WhisperRelay.cs\\\\n@@ -156,7 +156,7 @@\\\\n     // recipient-targeted RPC.\
+        \ It is NOT a server acknowledgement or read receipt.\\\\n     internal static bool LastDmSendAccepted {\
+        \ get; private set; }\\\\n \\\\n-    private const string HelpText=\"[LG] Moderators: /cmd lg start, /cmd\
+        \ lg clones heart 12, /cmd lg remove lobby (private); !lg is visible fallback. /help  /kick name  /ban name\
+        \  /remove lobby  /destroy lobby  /restore lobby  /clones heart|circle|orbit|off  /clones 2–8  /dm [playerName|#id]\
+        \ [message] (private; server compatibility varies).\";\\\\n+    private const string HelpText=\"[LG] Commands:\
+        \ /k red, /b blue, /tb green 5, /clones heart 12, /clones circle 12, /clearclones, /s, /speed 1.25, /vote\
+        \ 60, /discuss 30, /players 15, /imps 2, /crewvision 1, /impvision 1.5, /kc 30, /kd 1, /meetings 2, /ec\
+        \ 15, /common 1, /long 2, /short 3, /rolerate Engineer 1 100. Host permissions apply. /dm <player> <message>\
+        \ (if supported). Delegated requests may be visible in chat; shared clones are private custom-lobby only.\"\
+        ;\\\\n     private static bool CloneCommand(string raw)\\\\n     {\\\\n         string arg=raw[7..].Trim().ToLowerInvariant();\\\
+        \\n--- a/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\\n+++ b/fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        \\n@@ -1517,7 +1517,7 @@\\\\n             logo.setGravity(Gravity.CENTER_VERTICAL);\\\\n             top.addView(logo,new\
+        \ LinearLayout.LayoutParams(0,dp(activity,32),1));\\\\n             TextView version = new TextView(activity);\\\
+        \\n-            version.setText(\"v4.3.97\");\\\\n+            version.setText(\"v4.3.98\");\\\\n      \
+        \       version.setTextColor(MUTED);\\\\n             version.setTextSize(10);\\\\n             top.addView(version);\\\
+        \\n@@ -2131,7 +2131,7 @@\\\\n             CheckBox chatModEnabled=check(activity,mods,modConfig,\"Enabled\"\
+        ,\"Enable moderator commands (host only)\",false);\\\\n             CheckBox banPermission=check(activity,mods,modConfig,\"\
+        AllowBan\",\"Allow trusted moderators to ban\",false);\\\\n             CheckBox layoutPermission=check(activity,mods,modConfig,\"\
+        AllowLobbyLayout\",\"Allow private lobby remove / restore\",false);\\\\n-            CheckBox clonePermission=check(activity,mods,modConfig,\"\
+        AllowSharedClones\",\"Allow shared heart / circle clones\",false);\\\\n+            CheckBox clonePermission=check(activity,mods,modConfig,\"\
+        AllowSharedClones\",\"Allow shared heart / circle clones (private custom rooms)\",false);\\\\n         \
+        \    CheckBox startPermission=check(activity,mods,modConfig,\"AllowStart\",\"Allow normal match start\"\
+        ,false);\\\\n             CheckBox settingsPermission=check(activity,mods,modConfig,\"AllowSettings\",\"\
+        Allow normal lobby settings\",false);\\\\n             CheckBox tempbanPermission=check(activity,mods,modConfig,\"\
+        AllowTempban\",\"Allow timed rejoin restrictions (also requires ban permission)\",false);\\\\n@@ -2144,10\
+        \ +2144,10 @@\\\\n                     Toast.makeText(activity,\"Trusted moderators saved\",Toast.LENGTH_SHORT).show();\\\
+        \\n                 }catch(Exception e){Toast.makeText(activity,\"Could not save moderator permissions\"\
+        ,Toast.LENGTH_LONG).show();}\\\\n             });\\\\n-            section(activity,mods,\"Quick moderator\
+        \ commands\",\"!k red · !b blue · !tb green 5 · !speed 1.25 · !voting 60 · !discussion 30 · !s · !lg clones\
+        \ heart 12 · !lg clones off · !lg help. Type directly in ordinary chat. Names and #client IDs still work.\
+        \ Use name:Red to target a player named Red instead of the color. Host permissions apply; commands are visible\
+        \ to the room.\");\\\\n+            section(activity,mods,\"Quick moderator commands\",\"Commands: /k red,\
+        \ /b blue, /tb green 5, /clones heart 12, /clones circle 12, /clearclones, /s, /speed 1.25, /vote 60, /discuss\
+        \ 30, /players 15, /imps 2, /crewvision 1, /impvision 1.5, /kc 30, /kd 1, /meetings 2, /ec 15, /common 1,\
+        \ /long 2, /short 3, /rolerate Engineer 1 100. Host permissions apply. Color, exact name, or #clientID.\
+        \ Type slash commands; requests may appear in chat. Shared clones: private custom rooms only.\");\\\\n \
+        \            actionButton(activity,mods,\"Copy short command list\",v->{\\\\n                 android.content.ClipboardManager\
+        \ cm=(android.content.ClipboardManager)activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);\\\
+        \\n-                if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText(\"Moderator commands\"\
+        ,\"!k red\\\\\\\\n!b blue\\\\\\\\n!tb green 5\\\\\\\\n!speed 1.25\\\\\\\\n!voting 60\\\\\\\\n!discussion\
+        \ 30\\\\\\\\n!s\\\\\\\\n!lg clones heart 12\\\\\\\\n!lg clones off\\\\\\\\n!lg help\"));\\\\n+         \
+        \       if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText(\"Moderator commands\",\"/k\
+        \ red\\\\\\\\n/b blue\\\\\\\\n/tb green 5\\\\\\\\n/clones heart 12\\\\\\\\n/clones circle 12\\\\\\\\n/clearclones\\\
+        \\\\\\n/s\\\\\\\\n/speed 1.25\\\\\\\\n/vote 60\\\\\\\\n/discuss 30\\\\\\\\n/players 15\\\\\\\\n/imps 2\\\
+        \\\\\\n/crewvision 1\\\\\\\\n/impvision 1.5\\\\\\\\n/kc 30\\\\\\\\n/kd 1\\\\\\\\n/meetings 2\\\\\\\\n/ec\
+        \ 15\\\\\\\\n/common 1\\\\\\\\n/long 2\\\\\\\\n/short 3\\\\\\\\n/rolerate Engineer 1 100\\\\\\\\n/help\"\
+        ));\\\\n                 Toast.makeText(activity,\"Commands copied\",Toast.LENGTH_SHORT).show();\\\\n  \
+        \           });\\\\n             actionButton(activity,mods,\"Last moderator result\",v->{\\\\n@@ -2159,7\
+        \ +2159,7 @@\\\\n                 new AlertDialog.Builder(activity).setTitle(\"Moderator result\").setMessage(message)\\\
+        \\n                     .setPositiveButton(\"Close\",null).show();\\\\n             });\\\\n-          \
+        \  section(activity,mods,\"Slash commands\",\"/help, /kick, /ban, /destroy lobby, /remove lobby, /restore\
+        \ lobby, /clones, and opt-in /dm. Local commands stay local; delegated requests use native chat. !lg is\
+        \ visible to the room.\");\\\\n+            section(activity,mods,\"Slash commands\",\"/help, /kick, /ban,\
+        \ /destroy lobby, /remove lobby, /restore lobby, /clones, and opt-in /dm. Local commands stay local; delegated\
+        \ requests use native chat. Delegated requests may be visible to the room.\");\\\\n             actionButton(activity,mods,\"\
+        Copy DM syntax\",v->{\\\\n                 android.content.ClipboardManager cm=(android.content.ClipboardManager)activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);\\\
+        \\n                 if(cm!=null)cm.setPrimaryClip(android.content.ClipData.newPlainText(\"DM format\",\"\
+        /dm <name> <message>\"));\\\\n\\'); patch98=Path(f.name)\\ntry:\\n    subprocess.run([\"git\",\"apply\"\
+        ,\"--check\",str(patch98)],check=True)\\n    subprocess.run([\"git\",\"apply\",str(patch98)],check=True)\\\
+        nfinally:\\n    patch98.unlink(missing_ok=True)\\n\\nfrom pathlib import Path\\n\\ndef edit(path, old, new):\\\
+        n    p=Path(path); s=p.read_text(encoding=\\'utf8\\'); assert s.count(old)==1,(path,old,s.count(old));p.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n\\nplugin=Path(\\'LobbyGuardian/Plugin\\')\\np=plugin/\\'LobbyChatCommands.cs\\'\\nedit(p,\\\
+        '    internal static bool TryHandle(string raw)\\', \\'\\'\\'    private static string SafeInfo(string?\
+        \ value,int limit=64){\\n        string text=(value??\"\").Replace(\\'\\\\\\\\r\\',\\' \\').Replace(\\'\\\
+        \\\\\\n\\',\\' \\').Replace(\\'<\\',\\'‹\\').Replace(\\'>\\',\\'›\\').Trim();\\n        if(text.Length==0)return\
+        \ \"Unavailable\";\\n        return text.Length<=limit?text:text[..limit];\\n    }\\n    private static\
+        \ void PlayerInfo(string query){\\n        if(!InLobby()){Notice(\"Join a lobby first to use /info\");return;}\\\
+        n        if(query.Length==0){Notice(\"Use /info <color, exact name or #clientID>\");return;}\\n        var\
+        \ now=DateTimeOffset.UtcNow;\\n        if(Last.TryGetValue(\"info\",out var last)&&now-last<TimeSpan.FromSeconds(2)){Notice(\"\
+        Wait 2 seconds between info requests\");return;}\\n        Last[\"info\"]=now;\\n        var roster=GameBridge.ReadVotingRoster().Where(x=>x.ClientId>=0&&x.Name!=\"\
+        Host (loading)\").ToArray();\\n        bool byName=query.StartsWith(\"name:\",StringComparison.OrdinalIgnoreCase);\\\
+        n        bool byColor=query.StartsWith(\"color:\",StringComparison.OrdinalIgnoreCase);\\n        if(byName)query=query[5..].Trim();else\
+        \ if(byColor)query=query[6..].Trim();\\n        int color=ChatModerators.ColorIndex(query);\\n        PlayerIdentity[]\
+        \ matches;\\n        if(!byName&&!byColor&&query.StartsWith(\"#\")&&int.TryParse(query[1..],out int id))matches=roster.Where(x=>x.ClientId==id).ToArray();\\\
+        n        else if(!byName&&(byColor||color>=0))matches=color<0?Array.Empty<PlayerIdentity>():roster.Where(x=>x.ColorId==color).ToArray();\\\
+        n        else matches=roster.Where(x=>x.Name.Equals(query,StringComparison.OrdinalIgnoreCase)).ToArray();\\\
+        n        if(matches.Length!=1){Notice(\"No unique player found; use color, name:ExactName or #clientID\"\
+        );return;}\\n        var player=matches[0];\\n        WhisperRelay.LocalChatNotice(\"[LG] \"+SafeInfo(player.Name,40)+\"\
+        \ | \"+ChatModerators.ColorName(player.ColorId)+\" | Platform: \"+SafeInfo(player.Platform,40)+\" | Level:\
+        \ \"+(player.Level?.ToString()??\"Unavailable\")+\" | Client ID: \"+player.ClientId+(player.IsHost?\" |\
+        \ Host\":\"\"),false);\\n        WhisperRelay.LocalChatNotice(\"[LG] Friend code: \"+SafeInfo(player.FriendCode)+\"\
+        \ | PUID: \"+SafeInfo(player.Puid,100),false);\\n    }\\n    internal static bool TryHandle(string raw)\\\
+        '\\'\\')\\nedit(p,\\'            switch(head){\\',\\'\\'\\'            switch(head){\\n                case\
+        \ \"/info\": PlayerInfo(arg);return true;\\n                case \"/c\":\\n                case \"/color\"\
+        : {\\n                    if(!InLobby()){Notice(\"Join a pregame lobby first\");return true;}\\n       \
+        \             int color=ChatModerators.ColorIndex(arg);\\n                    if(color<0){Notice(\"Use /c\
+        \ <color>, e.g. /c red or /c cyan\");return true;}\\n                    Notice(PlayerLookCopy.RequestOwnColor(color));return\
+        \ true;\\n                }\\'\\'\\')\\np=plugin/\\'ChatModerators.cs\\'\\nedit(p,\\'    internal static\
+        \ PlayerIdentity? ResolveTarget(string query){\\',\\'\\'\\'    internal static int ColorIndex(string query)=>Array.IndexOf(Colors,NormalizeColor(query));\\\
+        n    internal static string ColorName(int? id)=>id.HasValue&&id.Value>=0&&id.Value<Colors.Length?Colors[id.Value]:\"\
+        Unknown color\";\\n    internal static PlayerIdentity? ResolveTarget(string query){\\'\\'\\')\\np=plugin/\\\
+        'PlayerLookCopy.cs\\'\\nedit(p,\\'    internal static void Shuffle(bool cosmetics){\\',\\'\\'\\'    internal\
+        \ static string RequestOwnColor(int color){\\n        try{\\n            if(Read(GameBridge.Client,\"GameState\"\
+        )?.ToString()!=\"Joined\")return \"Color changes require a pregame lobby.\";\\n            var now=DateTimeOffset.UtcNow;if(now-_lastAttempt<TimeSpan.FromSeconds(3))return\
+        \ \"Wait before changing appearance again.\";\\n            var pc=Find(\"PlayerControl\");var me=Read(pc,\"\
+        LocalPlayer\");if(me==null)return \"Local character not loaded.\";\\n            var palette=Read(Find(\"\
+        Palette\"),\"PlayerColors\");int count=Number(Read(palette,\"Length\",\"Count\"))??0;\\n            if(color<0||color>=count)return\
+        \ \"Color is unavailable in the native palette.\";\\n            if(All(Read(pc,\"AllPlayerControls\")).Any(p=>!ReferenceEquals(p,me)&&Read(p,\"\
+        OwnerId\")?.ToString()!=Read(me,\"OwnerId\")?.ToString()&&Capture(p).Color==color))return \"That color is\
+        \ already in use.\";\\n            _lastAttempt=now;\\n            return ApplyOne(me,\"CheckColor\",color)?\"\
+        Requested \"+ChatModerators.ColorName(color)+\"; game rules apply.\":\"Native color request unavailable.\"\
+        ;\\n        }catch(Exception){return \"Color request failed.\";}\\n    }\\n    internal static void Shuffle(bool\
+        \ cosmetics){\\'\\'\\')\\np=plugin/\\'WhisperRelay.cs\\'\\nedit(p,\\'Queue<(DateTimeOffset At,string Text)>\\\
+        ',\\'Queue<(DateTimeOffset At,string Text,bool Log)>\\')\\nedit(p,\\'internal static void LocalChatNotice(string\
+        \ message)\\',\\'internal static void LocalChatNotice(string message,bool log=true)\\')\\nedit(p,\\'_pendingChatNotices.Enqueue((DateTimeOffset.UtcNow,message));\\\
+        \\n        Status(\"chat-notice-queued\",message);\\',\\'_pendingChatNotices.Enqueue((DateTimeOffset.UtcNow,message,log));\\\
+        \\n        if(log)Status(\"chat-notice-queued\",message);\\')\\nedit(p,\\'Status(\"chat-ui-unavailable\"\
+        , \"Unable to display local notice: \"+next.Text);\\\\n                HostExtras.Warn(next.Text,\"chat-feedback\"\
+        );\\',\\'Status(\"chat-ui-unavailable\",next.Log?\"Unable to display local notice: \"+next.Text:\"Unable\
+        \ to display local player info\");\\\\n                if(next.Log)HostExtras.Warn(next.Text,\"chat-feedback\"\
+        );\\')\\nedit(p,\\'        string raw = (__0 ?? \"\").Trim();\\',\\'\\'\\'        string raw = (__0 ?? \"\
+        \").Trim();\\n        // Consume private local info and own-color commands before delegation.\\n       \
+        \ string head=raw.Split(\\' \\',2,StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.ToLowerInvariant()??\"\
+        \";\\n        if(head is \"/info\" or \"/c\" or \"/color\"){LobbyChatCommands.TryHandle(raw);return false;}\\\
+        '\\'\\')\\n# Keep help and copied shortcuts consistent.\\nfor p in (plugin/\\'WhisperRelay.cs\\',plugin/\\\
+        'ChatModerators.cs\\'):\\n    edit(p,\\'Commands: /k red, /b blue,\\',\\'Commands: /info red, /c red, /k\
+        \ red, /b blue,\\')\\nui=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        ')\\nedit(ui,\\'version.setText(\"v4.3.98\");\\',\\'version.setText(\"v4.3.99\");\\')\\nedit(ui,\\'Commands:\
+        \ /k red, /b blue,\\',\\'Commands: /info red (local roster), /c red (own color), /k red, /b blue,\\')\\\
+        nedit(ui,\\'\"Moderator commands\",\"/k red\\',\\'\"Moderator commands\",\"/info red\\\\\\\\n/c red\\\\\\\
+        \\n/k red\\')\\n\\n\\nfrom pathlib import Path\\n\\ndef edit(path, old, new):\\n    p=Path(path); s=p.read_text(encoding=\\\
+        'utf8\\'); assert s.count(old)==1,(path,old,s.count(old));p.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n\\nplugin=Path(\\'LobbyGuardian/Plugin\\')\\np=plugin/\\'LobbyChatCommands.cs\\'\\nedit(p,\\\
+        '        if(!CanAct(kind))return;\\',\\'        if(!CanAct(kind))return;\\\\n        if(!ChatModerators.PrivateRoom()){Notice(\"\
+        Lobby layout controls require a private custom lobby\");return;}\\')\\nedit(p,\\'                case \"\
+        /destroy\":\\',\\'\\'\\'                case \"/d\": {\\n                    if(arg.Length!=0){Notice(\"\
+        Use /d without arguments\");return true;}\\n                    QueueLobby(\"remove\");return true;\\n \
+        \               }\\n                case \"/r\": {\\n                    if(arg.Length!=0){Notice(\"Use\
+        \ /r without arguments\");return true;}\\n                    QueueLobby(\"restore\");return true;\\n  \
+        \              }\\n                case \"/destroy\":\\'\\'\\')\\nedit(p,\\'WhisperRelay.LocalChatNotice(\"\
+        [LG] \"+SafeInfo(player.Name,40)\\',\\'WhisperRelay.LocalChatNotice(\"[LG • Private info] \"+SafeInfo(player.Name,40)\\\
+        ')\\nedit(p,\\'WhisperRelay.LocalChatNotice(\"[LG] Friend code: \"+SafeInfo(player.FriendCode)\\',\\'WhisperRelay.LocalChatNotice(\"\
+        [LG • Only you] Friend code: \"+SafeInfo(player.FriendCode)\\')\\np=plugin/\\'ChatModerators.cs\\'\\nedit(p,\\\
+        'private static bool PrivateRoom()=>\\',\\'internal static bool PrivateRoom()=>\\')\\nedit(p,\\'\"k\"=>\"\
+        kick\",\"b\"=>\"ban\",\\',\\'\"k\"=>\"kick\",\"b\"=>\"ban\",\"d\"=>\"destroy\",\"r\"=>\"restore\",\\')\\\
+        nedit(p,\\'        if(first==\"clearclones\")arg=\"off\";\\',\\'        if(first==\"clearclones\")arg=\"\
+        off\";\\\\n        if((first is \"d\" or \"r\")&&arg.Length==0)arg=\"lobby\";\\')\\nedit(p,\\'         \
+        \   if(pieces.Length>0&&pieces[0].Equals(\"clearclones\",StringComparison.OrdinalIgnoreCase))arg=\"off\"\
+        ;\\',\\'            if(pieces.Length>0&&pieces[0].Equals(\"clearclones\",StringComparison.OrdinalIgnoreCase))arg=\"\
+        off\";\\\\n            if(pieces.Length>0&&(pieces[0].ToLowerInvariant() is \"d\" or \"r\")&&arg.Length==0)arg=\"\
+        lobby\";\\')\\np=plugin/\\'HostLobbyClose.cs\\'\\nedit(p,\\'            bool restore=act.GetString()==\"\
+        restore-hosted-room\";\\',\\'            if(!ChatModerators.PrivateRoom()){Status(\"close-denied\",\"Lobby\
+        \ layout changes require a private custom room\");return;}\\\\n            bool restore=act.GetString()==\"\
+        restore-hosted-room\";\\')\\np=plugin/\\'WhisperRelay.cs\\'\\nedit(p,\\'        if(!sentEcho&&(message.Contains(\"\
+        DM\",StringComparison.OrdinalIgnoreCase)||\\',\\'        if(log&&!sentEcho&&(message.Contains(\"DM\",StringComparison.OrdinalIgnoreCase)||\\\
+        ')\\nfor p in (plugin/\\'WhisperRelay.cs\\',plugin/\\'ChatModerators.cs\\'):\\n    edit(p,\\'Commands: /info\
+        \ red, /c red, /k red,\\',\\'Commands: /info red (only you), /d, /r (private layout), /c red, /k red,\\\
+        ')\\nui=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\')\\nedit(ui,\\\
+        'version.setText(\"v4.3.99\");\\',\\'version.setText(\"v4.4.00\");\\')\\nedit(ui,\\'/info red (local roster),\
+        \ /c red (own color),\\',\\'/info red (private local reply on your device, no host needed), /d, /r (private\
+        \ layout, host permission), /c red (own color),\\')\\nedit(ui,\\'\"Moderator commands\",\"/info red\\\\\\\
+        \\n/c red\\',\\'\"Moderator commands\",\"/info red\\\\\\\\n/d\\\\\\\\n/r\\\\\\\\n/c red\\')\\n\\n# v4.4.07:\
+        \ remove LG-only appearance effects by omitting their source deltas.\\nedit(ui,\\'version.setText(\"v4.4.00\"\
+        );\\',\\'version.setText(\"v4.4.07\");\\')\\nassert not (plugin/\\'LobbyCosmeticFx.cs\\').exists(), \"Unexpected\
+        \ pre-existing cosmetic FX source\"\\n\\n# v4.4.08: remove the custom start UI and its recurring hooks,\
+        \ not native start.\\nfrom pathlib import Path\\n\\ndef cut(path, start, end):\\n    p=Path(path);s=p.read_text(encoding=\\\
+        'utf8\\')\\n    assert s.count(start)==1 and s.count(end)==1,(path,start,end)\\n    a=s.index(start); b=s.index(end,a);\
+        \ assert b>a\\n    p.write_text(s[:a]+s[b:],encoding=\\'utf8\\')\\n\\ncore=plugin/\\'LobbyGuardianPlugin.cs\\\
+        '\\ncut(core,\\'            try {\\\\n                var startType=AppDomain.CurrentDomain.GetAssemblies().Select(a=>a.GetType(\"\
+        GameStartManager\",false))\\',\\'            // Host-only RPC anomaly monitoring.\\')\\nedit(core,\\'  \
+        \  private static void StartManagerPostfix(object __instance) => UtilityFull.OnStartManagerUpdate(__instance);\\\
+        \\n\\',\\'\\')\\nedit(core,\\'// Optional UI postfixes: preserve other protections if either cannot patch.\\\
+        ',\\'// Optional chat visibility postfix: preserve other protections if it cannot patch.\\')\\nutil=plugin/\\\
+        'UtilityFull.cs\\'\\nedit(util,\\'    private static DateTimeOffset _nextStartDiagnostic=DateTimeOffset.MinValue;\\\
+        \\n\\',\\'\\')\\ncut(util,\\'            if(type==\"private-host-start\"){\\',\\'            if(!Started()){Status(\"\
+        private-host-denied\",\"Wait for the active match\");return;}\\')\\n# Ignore stale commands for the deleted\
+        \ legacy start button.\\nedit(util,\\'        if(type.StartsWith(\"private-host-\",StringComparison.Ordinal)){PrivateHostCommand(type,r);return;}\\\
+        ',\\'        if(type==\"private-host-start\")return;\\\\n        if(type.StartsWith(\"private-host-\",StringComparison.Ordinal)){PrivateHostCommand(type,r);return;}\\\
+        ')\\ncut(util,\\'    private static object? NativeStartButton(object? manager){\\',\\'    private static\
+        \ bool NativePregame()=>\\')\\ncut(util,\\'    private static object? _liveStartManager;\\',\\'    // Separate\
+        \ user-request results from recurring native visibility checks.\\')\\nedit(util,\\'    // Separate user-request\
+        \ results from recurring native visibility checks.\\',\\'    // Result for explicitly delegated start commands;\
+        \ no recurring UI checks.\\')\\nedit(util,\\'        var manager=CurrentStartManager();\\',\\'        var\
+        \ manager=Singleton(\"GameStartManager\");\\')\\ncut(util,\\'    private static void ShowHostStartButton()=>\\\
+        ',\\'    internal static void OnChatSetVisible(object chat,bool visible)\\')\\ncut(util,\\'    private static\
+        \ string _previousStartVisibility=\"\";\\',\\'    private static void ShowReportButton()\\')\\nclient=plugin/\\\
+        'ClientFeatures.cs\\'\\nedit(client,\\'            startEligible = GameBridge.IsHost() && gameId!=0 && gameId!=-1\
+        \ && (Get(GameBridge.Client,\"GameState\")?.ToString() is \"Joined\" or \"Lobby\" or \"1\"),\\\\n\\',\\\
+        '\\')\\nui=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\')\\ncut(ui,\\\
+        '            // Small host-only fallback, separate from the native Start control.\\',\\'            Log.i(TAG,\
+        \ \"Floating controls attached to game activity \"\\')\\ncut(ui,\\'    private static void requestNormalStart(Activity\
+        \ a,android.app.Dialog menu){\\',\\'    private static void copyDiagnostic(Activity a,String filename,String\
+        \ caption){\\')\\nedit(ui,\\'            actionButton(activity,host,\"Start Game\",v->requestNormalStart(activity,dialog));\\\
+        \\n\\',\\'\\')\\nedit(ui,\\'            actionButton(activity,host,\"Last Start Result\",v->showStartResult(activity));\\\
+        \\n\\',\\'\\')\\nedit(ui,\\'version.setText(\"v4.4.07\");\\',\\'version.setText(\"v4.4.08\");\\')\\n# Preserve\
+        \ other host actions and the existing shared decoration cleanup on native BeginGame.\\nfor path in (core,util,client,ui):\\\
+        n    s=path.read_text(encoding=\\'utf8\\')\\n    for marker in (\\'StartManagerPostfix\\',\\'OnStartManagerUpdate\\\
+        ',\\'HostStartButtonVisible\\',\\'ShowHostStartButton\\',\\'NativeStartButton\\',\\'requestNormalStart\\\
+        ',\\'checkStart\\',\\'awaitStartResult\\',\\'showStartResult\\',\\'startEligible\\'):\\n        assert marker\
+        \ not in s,(path,marker)\\nassert \\'SharedCloneStartPrefix\\' in core.read_text(encoding=\\'utf8\\')\\\
+        nprint(\\'Removed start overlay, start update postfix, legacy visibility override and polling; native start\
+        \ retained.\\')\\n\\nfrom pathlib import Path\\nimport re\\nroot=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore\\\
+        ')\\nplugin=Path(\\'LobbyGuardian/Plugin\\')\\nui=root/\\'LobbyGuardianOverlay.java\\'\\napp=plugin/\\'LobbyAppearance.cs\\\
+        '\\ndef replace(p,old,new):\\n    s=p.read_text(encoding=\\'utf8\\'); assert s.count(old)==1,(str(p),old[:90],s.count(old));p.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n# Remove obsolete Start controls by config key or label, tolerating already-removed entries.\\\
+        nfor p in root.rglob(\\'*.java\\'):\\n    s=p.read_text(encoding=\\'utf8\\'); old=s\\n    s=re.sub(r\\'(?im)^[\
+        \ \\\\t]*(?:check|checkbox|toggle|option)\\\\s*\\\\(\\\\s*a\\\\s*,\\\\s*p\\\\s*,\\\\s*\"Show (?:host )?Start\
+        \ button\"[^;]*?\\\\);[ \\\\t]*(?:\\\\r?\\\\n|$)\\',\\'\\',s)\\n    s=re.sub(r\\'(?ims)^[ \\\\t]*button\\\
+        \\s*\\\\([^\\\\n]*\"Host Start button diagnostic\"\\\\s*,\\\\s*\\\\(\\\\)\\\\s*->\\\\s*\\\\{.*?^[ \\\\t]*\\\
+        \\}\\\\);[ \\\\t]*\\\\n\\',\\'\\',s)\\n    s=re.sub(r\\'(?im)^[ \\\\t]*(?:action|button)\\\\s*\\\\([^\\\\\
+        n;]*\"(?:Check host start health|Host Start button diagnostic|Start via native button \\\\(private host\\\
+        \\))\"[^\\\\n;]*\\\\);[ \\\\t]*\\\\n\\',\\'\\',s)\\n    s=re.sub(r\\'(?i),\\\\s*\"HostStartButtonVisible\"\
+        |\"HostStartButtonVisible\"\\\\s*,\\',\\'\\',s)\\n    if s!=old:p.write_text(s,encoding=\\'utf8\\')\\n \
+        \   assert not re.search(r\\'\"Show (?:host )?Start button\"\\',s,re.I),(p,\\'obsolete Start checkbox remains\\\
+        ')\\n    assert \\'HostStartButtonVisible\\' not in s,(p,\\'obsolete Start configuration remains\\')\\n#\
+        \ Restore direct host controls in hosted pregame rooms; keep delegated public actions restricted.\\nreplace(plugin/\\\
+        'HostLobbyClose.cs\\',\\'            if(!ChatModerators.PrivateRoom()){Status(\"close-denied\",\"Lobby layout\
+        \ changes require a private custom room\");return;}\\\\n\\',\\'\\')\\nreplace(plugin/\\'LobbyChatCommands.cs\\\
+        ',\\'        if(!ChatModerators.PrivateRoom()){Notice(\"Lobby layout controls require a private custom lobby\"\
+        );return;}\\\\n\\',\\'\\')\\n# Existing host checks, confirmation, room state, cooldown and restore behavior\
+        \ remain unchanged.\\n# Text uses a static 3x5 dot alphabet, no movement or new per-frame loops.\\nfont={\\\
+        n\\'A\\':\\'010/101/111/101/101\\',\\'B\\':\\'110/101/110/101/110\\',\\'C\\':\\'011/100/100/100/011\\',\\\
+        'D\\':\\'110/101/101/101/110\\',\\'E\\':\\'111/100/110/100/111\\',\\'F\\':\\'111/100/110/100/100\\',\\'G\\\
+        ':\\'011/100/101/101/011\\',\\'H\\':\\'101/101/111/101/101\\',\\'I\\':\\'111/010/010/010/111\\',\\'J\\':\\\
+        '001/001/001/101/010\\',\\'K\\':\\'101/101/110/101/101\\',\\'L\\':\\'100/100/100/100/111\\',\\'M\\':\\'101/111/111/101/101\\\
+        ',\\'N\\':\\'101/111/111/111/101\\',\\'O\\':\\'010/101/101/101/010\\',\\'P\\':\\'110/101/110/100/100\\',\\\
+        'Q\\':\\'010/101/101/111/011\\',\\'R\\':\\'110/101/110/101/101\\',\\'S\\':\\'011/100/010/001/110\\',\\'T\\\
+        ':\\'111/010/010/010/010\\',\\'U\\':\\'101/101/101/101/111\\',\\'V\\':\\'101/101/101/101/010\\',\\'W\\':\\\
+        '101/101/111/111/101\\',\\'X\\':\\'101/101/010/101/101\\',\\'Y\\':\\'101/101/010/010/010\\',\\'Z\\':\\'111/001/010/100/111\\\
+        ',\\n\\'0\\':\\'111/101/101/101/111\\',\\'1\\':\\'010/110/010/010/111\\',\\'2\\':\\'110/001/010/100/111\\\
+        ',\\'3\\':\\'110/001/010/001/110\\',\\'4\\':\\'101/101/111/001/001\\',\\'5\\':\\'111/100/110/001/110\\',\\\
+        '6\\':\\'011/100/110/101/010\\',\\'7\\':\\'111/001/010/010/010\\',\\'8\\':\\'010/101/010/101/010\\',\\'9\\\
+        ':\\'010/101/011/001/110\\'}\\nfont_cs=\\',\\\\n        \\'.join(\"[\\'\"+k+\"\\']=\\\\\"\"+v.replace(\\\
+        '/\\',\\'\\')+\"\\\\\"\" for k,v in font.items())\\nhelpers=\\'\\'\\'    private const int SharedCloneLimit=50;\\\
+        n    private static readonly Dictionary<char,string> SharedGlyphs=new(){\\n        \\'\\'\\'+font_cs+\\\
+        '\\'\\'\\n    };\\n    private static List<(double x,double y)> SharedTextPoints(string text){\\n      \
+        \  var points=new List<(double x,double y)>();\\n        text=text.Trim().ToUpperInvariant();\\n       \
+        \ if(text.Length<1||text.Length>6||text.Any(c=>!SharedGlyphs.ContainsKey(c)))return points;\\n        double\
+        \ mid=(text.Length*4-2)/2.0;\\n        for(int i=0;i<text.Length;i++){\\n            string glyph=SharedGlyphs[text[i]];\\\
+        n            for(int p=0;p<15;p++)if(glyph[p]==\\'1\\')points.Add(((i*4+p%3-mid)*0.52,(2-p/3)*0.52));\\\
+        n        }\\n        return points;\\n    }\\n    private static (double x,double y) SharedShapePoint(string\
+        \ form,int i,int count){\\n        double t=2*Math.PI*i/count;\\n        if(form==\"Heart\")return (2.0*Math.Pow(Math.Sin(t),3),(13*Math.Cos(t)-5*Math.Cos(2*t)-2*Math.Cos(3*t)-Math.Cos(4*t))/9.0);\\\
+        n        if(form==\"Circle\")return (1.8*Math.Cos(t),1.8*Math.Sin(t));\\n        int sides=form==\"Triangle\"\
+        ?3:form==\"Star\"?10:4;\\n        double phase=form==\"Square\"?Math.PI/4:Math.PI/2;\\n        double edge=(double)i*sides/count;int\
+        \ k=(int)edge;double f=edge-k;\\n        double a=phase+2*Math.PI*k/sides,b=phase+2*Math.PI*(k+1)/sides;\\\
+        n        double ra=form==\"Star\"&&k%2!=0?0.85:1.8,rb=form==\"Star\"&&(k+1)%2!=0?0.85:1.8;\\n        return\
+        \ ((1-f)*ra*Math.Cos(a)+f*rb*Math.Cos(b),(1-f)*ra*Math.Sin(a)+f*rb*Math.Sin(b));\\n    }\\n\\'\\'\\'\\nreplace(app,\\\
+        '    private static void TickShared(){\\',helpers+\\'    private static void TickShared(){\\')\\nold=\\\
+        '\\'\\'                    if(!SharedClear(true)){SharedStatus(\"cleanup-failed\",\"Previous decorations\
+        \ could not be removed\");return;}\\n                    var me=LocalPlayer();var center=Get(Get(me,\"transform\"\
+        ),\"position\");if(center is null){SharedStatus(\"unavailable\",\"Player position unavailable\");return;}\\\
+        n                    int count=Math.Clamp(r.GetProperty(\"count\").GetInt32(),2,20);string form=r.GetProperty(\"\
+        formation\").GetString()??\"Heart\";\\n                    if(form!=\"Heart\"&&form!=\"Circle\")return;\\\
+        n                    float cx=Float(center,\"x\"),cy=Float(center,\"y\"),cz=Float(center,\"z\");\\n    \
+        \                var positions=new List<object>();\\n                    // Preserve existing 6/12 layouts;\
+        \ spread larger formations to avoid overlapping bodies.\\n                    float scale=Math.Max(1f,count/12f);\\\
+        n                    for(int i=0;i<count;i++){\\n                        double t=2*Math.PI*i/count;double\
+        \ x=form==\"Heart\"?2.0*Math.Pow(Math.Sin(t),3):1.8*Math.Cos(t);\\n                        double y=form==\"\
+        Heart\"?(13*Math.Cos(t)-5*Math.Cos(2*t)-2*Math.Cos(3*t)-Math.Cos(4*t))/9.0:1.8*Math.Sin(t);\\n         \
+        \               var at=Vec(cx+(float)x*scale,cy+(float)y*scale,cz);if(at is null)return;positions.Add(at);\\\
+        n                    }\\n\\'\\'\\'\\nnew=\\'\\'\\'                    int count=Math.Clamp(r.GetProperty(\"\
+        count\").GetInt32(),2,SharedCloneLimit);string form=r.GetProperty(\"formation\").GetString()??\"Heart\"\
+        ;\\n                    if(form is not (\"Heart\" or \"Circle\" or \"Triangle\" or \"Square\" or \"Diamond\"\
+        \ or \"Star\" or \"Text\")){SharedStatus(\"invalid-formation\",\"Unknown formation\");return;}\\n      \
+        \              var textPoints=form==\"Text\"?SharedTextPoints(r.TryGetProperty(\"text\",out var word)?word.GetString()??\"\
+        \":\"\"):null;\\n                    if(textPoints!=null&&(textPoints.Count==0||textPoints.Count>count)){SharedStatus(\"\
+        text-limit\",textPoints.Count==0?\"Use 1–6 letters A–Z or digits\":\"Text needs \"+textPoints.Count+\" clones;\
+        \ selected limit \"+count+\". Choose a higher count or a shorter word.\");return;}\\n                  \
+        \  var me=LocalPlayer();var center=Get(Get(me,\"transform\"),\"position\");if(center is null){SharedStatus(\"\
+        unavailable\",\"Player position unavailable\");return;}\\n                    if(textPoints!=null)count=textPoints.Count;\\\
+        n                    float cx=Float(center,\"x\"),cy=Float(center,\"y\"),cz=Float(center,\"z\");\\n    \
+        \                var positions=new List<object>();\\n                    float scale=form==\"Text\"?1f:Math.Max(1f,count/12f);\\\
+        n                    for(int i=0;i<count;i++){\\n                        var (x,y)=textPoints!=null?textPoints[i]:SharedShapePoint(form,i,count);\\\
+        n                        var at=Vec(cx+(float)x*scale,cy+(float)y*scale,cz);if(at is null)return;positions.Add(at);\\\
+        n                    }\\n                    if(!SharedClear(true)){SharedStatus(\"cleanup-failed\",\"Previous\
+        \ decorations could not be removed\");return;}\\n\\'\\'\\'\\nreplace(app,old,new)\\n# Android menu uses\
+        \ the same existing command file; no polling added.\\nstart=\\'\\'\\'    private static void sharedCloneCommand(Activity\
+        \ activity,String kind,String formation,int count){\\'\\'\\'\\nend=\\'\\'\\'    private static void showPettingTargets(Activity\
+        \ activity) {\\'\\'\\'\\ns=ui.read_text(encoding=\\'utf8\\'); a=s.index(start);b=s.index(end,a)\\njava=\\\
+        '\\'\\'    private static void sharedCloneCommand(Activity activity,String kind,String formation,int count){\\\
+        n        sharedCloneCommand(activity,kind,formation,count,\"\");\\n    }\\n    private static void sharedCloneCommand(Activity\
+        \ activity,String kind,String formation,int count,String word){\\n        try{JSONObject command=new JSONObject();command.put(\"\
+        type\",kind);command.put(\"formation\",formation);command.put(\"count\",count);command.put(\"text\",word);command.put(\"\
+        createdUtcMs\",System.currentTimeMillis());\\n            writeClientFile(\"LobbyGuardian-shared-clone-command.json\"\
+        ,command);\\n            Toast.makeText(activity,kind.equals(\"clear\")?\"Removal requested\":\"Shared decoration\
+        \ requested — check status\",Toast.LENGTH_SHORT).show();\\n        }catch(Exception e){Toast.makeText(activity,\"\
+        Unable to send clone request\",Toast.LENGTH_SHORT).show();}\\n    }\\n    private static void showSharedClones(Activity\
+        \ activity){\\n        final String[] forms={\"Heart\",\"Circle\",\"Triangle\",\"Square\",\"Diamond\",\"\
+        Star\",\"Text\"};\\n        new AlertDialog.Builder(activity).setTitle(\"Shared clones • host\")\\n    \
+        \        .setItems(forms,(d,i)->{\\n                String form=forms[i];\\n                if(form.equals(\"\
+        Text\")){\\n                    EditText input=new EditText(activity);input.setSingleLine(true);input.setHint(\"\
+        A–Z / 0–9, e.g. LG\");\\n                    input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(6),new\
+        \ android.text.InputFilter.AllCaps()});\\n                    new AlertDialog.Builder(activity).setTitle(\"\
+        Clone text • host\")\\n                        .setMessage(\"Use 1–6 letters or digits. Choose a clone budget\
+        \ next; actual count depends on the letters. Use with player agreement.\")\\n                        .setView(input).setPositiveButton(\"\
+        Draw\",(dd,j)->{\\n                            String word=input.getText().toString().trim();\\n       \
+        \                     if(!word.matches(\"[A-Z0-9]{1,6}\")){Toast.makeText(activity,\"Use 1–6 letters or\
+        \ digits\",Toast.LENGTH_LONG).show();return;}\\n                            final int[] budgets={20,30,40,50};\\\
+        n                            String[] budgetLabels={\"20 max (recommended)\",\"30 max (test)\",\"40 max\
+        \ (test)\",\"50 max (test)\"};\\n                            new AlertDialog.Builder(activity).setTitle(\"\
+        Text clone budget\")\\n                                .setItems(budgetLabels,(bd,bi)->new AlertDialog.Builder(activity).setTitle(\"\
+        Draw \"+word)\\n                                    .setMessage(\"Only the dots needed will spawn. Higher\
+        \ counts may affect FPS; test with player agreement.\")\\n                                    .setPositiveButton(\"\
+        Draw\",(cd,ci)->sharedCloneCommand(activity,\"spawn\",\"Text\",budgets[bi],word))\\n                   \
+        \                 .setNegativeButton(\"Cancel\",null).show()).setNegativeButton(\"Cancel\",null).show();\\\
+        n                        }).setNegativeButton(\"Cancel\",null).show();return;\\n                }\\n   \
+        \             final int[] counts={6,12,16,20,30,40,50};String[] items={\"6 clones\",\"12 clones\",\"16 clones\"\
+        ,\"20 clones\",\"30 clones (test)\",\"40 clones (test)\",\"50 clones (test)\"};\\n                new AlertDialog.Builder(activity).setTitle(form+\"\
+        \ • clone count\")\\n                    .setItems(items,(dd,j)->new AlertDialog.Builder(activity).setTitle(\"\
+        Shared lobby decorations\")\\n                        .setMessage(\"Clones appear gradually and are removed\
+        \ before match start. More clones may reduce FPS.\")\\n                        .setPositiveButton(\"Show\"\
+        ,(ddd,k)->sharedCloneCommand(activity,\"spawn\",form,counts[j]))\\n                        .setNegativeButton(\"\
+        Cancel\",null).show()).setNegativeButton(\"Cancel\",null).show();\\n            }).setNegativeButton(\"\
+        Close\",null).show();\\n    }\\n\\'\\'\\'\\n# EditText is already imported via android.widget.* or explicit\
+        \ import.\\nassert \\'import android.widget.*;\\' in s or \\'import android.widget.EditText;\\' in s\\nui.write_text(s[:a]+java+s[b:],encoding=\\\
+        'utf8\\')\\nreplace(ui,\\'version.setText(\"v4.4.08\");\\',\\'version.setText(\"v4.4.11\");\\')\\nprint(\\\
+        'v4.4.11: selectable clone counts and text budgets; existing pacing retained\\')\\n\\n# v4.4.12: anchored\
+        \ pet control and optional follow.\\nfrom pathlib import Path\\n\\ndef edit(p,old,new):\\n    s=p.read_text(encoding=\\\
+        'utf8\\')\\n    assert s.count(old)==1,(str(p),old,s.count(old))\\n    p.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n\\np=Path(\\'LobbyGuardian/Plugin/PettingHand.cs\\')\\nedit(p,\\'    private static float _joyX,_joyY,_handX,_handY;\\\
+        ',\\'\\'\\'    private static float _joyX,_joyY,_handX,_handY;\\n    private static bool _handAnchored;\\\
+        n    private static int _requestedFollow=-1,_activeFollow=-1;\\n    // Only inspect the current lobby roster,\
+        \ and only while follow is active.\\n    private static object? FollowPosition(object? playerType,int target){\\\
+        n        var rows=Get(playerType,\"AllPlayerControls\");\\n        if(rows is null)return null;\\n     \
+        \   if(rows is System.Collections.IEnumerable managed){\\n            foreach(var item in managed){\\n \
+        \               if(item is not null&&int.TryParse(Get(item,\"OwnerId\")?.ToString(),out int id)&&id==target)\\\
+        n                    return PathGet(item,\"transform.position\");\\n            }\\n            return null;\\\
+        n        }\\n        if(!int.TryParse((Get(rows,\"Count\")??Get(rows,\"Length\"))?.ToString(),out int count)||count<0||count>50)return\
+        \ null;\\n        var getter=rows.GetType().GetMethods(Flags).FirstOrDefault(m=>m.Name==\"get_Item\"&&m.GetParameters().Length==1&&m.GetParameters()[0].ParameterType==typeof(int));\\\
+        n        if(getter is null)return null;\\n        for(int i=0;i<count;i++){\\n            var item=getter.Invoke(rows,new\
+        \ object[]{i});\\n            if(item is not null&&int.TryParse(Get(item,\"OwnerId\")?.ToString(),out int\
+        \ id)&&id==target)\\n                return PathGet(item,\"transform.position\");\\n        }\\n       \
+        \ return null;\\n    }\\'\\'\\')\\nedit(p,\\'        _liveShare=false;_hasSharedPet=false;_shareUnavailable=false;_shareTransport=_shareError=\"\
+        \";_nextSharedPet=default;\\', \\'\\'\\'        _liveShare=false;_hasSharedPet=false;_shareUnavailable=false;_shareTransport=_shareError=\"\
+        \";_nextSharedPet=default;\\n        _handAnchored=false;_requestedFollow=_activeFollow=-1;\\'\\'\\')\\\
+        nedit(p,\\'long reset=r.GetProperty(\"reset\").GetInt64();if(reset!=_lastReset){_handX=_handY=0;_lastReset=reset;}\\\
+        ',\\'long reset=r.GetProperty(\"reset\").GetInt64();if(reset!=_lastReset){_handAnchored=false;_lastReset=reset;}\\\
+        ')\\nedit(p,\\'                _liveShare=share;_liveRoom=room;_liveEnabled=true;\\', \\'\\'\\'        \
+        \        _liveShare=share;_liveRoom=room;_liveEnabled=true;\\n                int requested=r.TryGetProperty(\"\
+        followClientId\",out var follow)&&follow.TryGetInt32(out int id)?id:-1;\\n                if(requested!=_requestedFollow){_requestedFollow=requested;_activeFollow=share&&SharePetAllowed(client)?requested:-1;}\\\
+        n                if(!_liveShare||!SharePetAllowed(client))_activeFollow=-1;\\'\\'\\')\\nedit(p,\\'\\'\\\
+        '            _handX+=_joyX*3f*dt;_handY+=_joyY*3f*dt;\\n            float dist=MathF.Sqrt(_handX*_handX+_handY*_handY);if(dist>6f){_handX*=6f/dist;_handY*=6f/dist;}\\\
+        n            var x=Convert.ToSingle(Get(position,\"x\")??Get(position,\"X\")??throw new InvalidOperationException(\"\
+        Missing X\"));\\n            var y=Convert.ToSingle(Get(position,\"y\")??Get(position,\"Y\")??throw new\
+        \ InvalidOperationException(\"Missing Y\"));\\n            var dest=Vector2(x+_handX,y+_handY);\\'\\'\\\
+        ',\\'\\'\\'            var x=Convert.ToSingle(Get(position,\"x\")??Get(position,\"X\")??throw new InvalidOperationException(\"\
+        Missing X\"));\\n            var y=Convert.ToSingle(Get(position,\"y\")??Get(position,\"Y\")??throw new\
+        \ InvalidOperationException(\"Missing Y\"));\\n            if(!_handAnchored){_handX=x;_handY=y;_handAnchored=true;}\\\
+        n            // Neutral joystick holds the last world-space destination; it does not recenter.\\n      \
+        \      if(_activeFollow>=0){\\n                var target=FollowPosition(playerType,_activeFollow);\\n \
+        \               if(target is null){_activeFollow=-1;Status(\"follow-stopped\",\"Target left or is no longer\
+        \ available; holding last position\");}\\n                else{\\n                    _handX=Convert.ToSingle(Get(target,\"\
+        x\")??Get(target,\"X\")??x);\\n                    _handY=Convert.ToSingle(Get(target,\"y\")??Get(target,\"\
+        Y\")??y)+0.55f;\\n                }\\n            }\\n            if(_activeFollow<0){_handX+=_joyX*3f*dt;_handY+=_joyY*3f*dt;}\\\
+        n            // Keep the existing six-unit reach limit. Do not modify the target player.\\n            float\
+        \ dx=_handX-x,dy=_handY-y;\\n            float dist=MathF.Sqrt(dx*dx+dy*dy);if(dist>6f){dx*=6f/dist;dy*=6f/dist;}\\\
+        n            float destX=x+dx,destY=y+dy;\\n            if(_activeFollow<0){_handX=destX;_handY=destY;}\\\
+        n            var dest=Vector2(destX,destY);\\'\\'\\')\\nedit(p,\\'            if(moved&&now>=_liveAnim){_liveAnim=now.AddMilliseconds(550);animated=InvokeLocal(hand,\"\
+        StartPet\",pet);}\\',\\'\\'\\'            if(moved&&now>=_liveAnim){\\n                _liveAnim=now.AddMilliseconds(550);animated=InvokeLocal(hand,\"\
+        StartPet\",pet);\\n                // Some native animations refresh the pet destination when they restart.\\\
+        n                if(animated&&dest is not null)InvokeLocal(pet,\"SetGettingPet\",true,dest);\\n        \
+        \    }\\'\\'\\')\\nedit(p,\\'SharePet(client,player,position,dest,x+_handX,y+_handY,now)\\',\\'SharePet(client,player,position,dest,destX,destY,now)\\\
+        ')\\n\\nu=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\')\\nedit(u,\\\
+        '    private static void showHandControl(Activity a,boolean share){\\',\\'\\'\\'    private static void\
+        \ showHandControl(Activity a,boolean share){showHandControl(a,share,-1,\"\");}\\n    private static void\
+        \ chooseSharedHandFollow(Activity a,android.app.Dialog menu){\\n        try{\\n            JSONObject room=freshHandRoom();\\\
+        n            if(!room.optBoolean(\"lobby\"))throw new IllegalStateException();\\n            JSONArray arr=room.optJSONArray(\"\
+        players\");\\n            java.util.ArrayList<Integer> ids=new java.util.ArrayList<>();\\n            java.util.ArrayList<String>\
+        \ names=new java.util.ArrayList<>();\\n            if(arr!=null)for(int i=0;i<arr.length();i++){\\n    \
+        \            JSONObject row=arr.optJSONObject(i);if(row==null||row.optBoolean(\"isLocal\"))continue;\\n\
+        \                int id=row.optInt(\"id\",-1);if(id<0||ids.contains(id))continue;\\n                ids.add(id);names.add(row.optString(\"\
+        name\",\"Player\"));\\n            }\\n            if(ids.isEmpty()){Toast.makeText(a,\"No other players\
+        \ in the lobby\",Toast.LENGTH_SHORT).show();return;}\\n            new AlertDialog.Builder(a).setTitle(\"\
+        Follow player with your pet\")\\n                .setItems(names.toArray(new String[0]),(d,i)->new AlertDialog.Builder(a).setTitle(\"\
+        Shared pet follow\")\\n                    .setMessage(\"Private online lobbies with player agreement only.\
+        \ Your own pet follows within its existing reach. Touch the joystick or Center to stop following.\")\\n\
+        \                    .setPositiveButton(\"Follow\",(dd,j)->{menu.dismiss();showHandControl(a,true,ids.get(i),names.get(i));})\\\
+        n                    .setNegativeButton(\"Cancel\",null).show()).setNegativeButton(\"Cancel\",null).show();\\\
+        n        }catch(Exception e){Toast.makeText(a,\"Player roster unavailable\",Toast.LENGTH_SHORT).show();}\\\
+        n    }\\n    private static void showHandControl(Activity a,boolean share,int targetClientId,String targetName){\\\
+        '\\'\\')\\nedit(u,\\'            if(previous!=null){decor.removeView(previous);return;}\\',\\'         \
+        \   if(previous!=null){decor.removeView(previous);}\\')\\nedit(u,\\'        final float[] joy={0f,0f};final\
+        \ long[] reset={System.currentTimeMillis()};\\',\\'        final float[] joy={0f,0f};final long[] reset={System.currentTimeMillis()};final\
+        \ int[] follow={targetClientId};\\')\\nedit(u,\\'                    cmd.put(\"x\",(double)joy[0]);cmd.put(\"\
+        y\",(double)joy[1]);cmd.put(\"reset\",reset[0]);cmd.put(\"createdUtcMs\",System.currentTimeMillis());\\\
+        ',\\'                    cmd.put(\"x\",(double)joy[0]);cmd.put(\"y\",(double)joy[1]);cmd.put(\"reset\",reset[0]);cmd.put(\"\
+        followClientId\",follow[0]);cmd.put(\"createdUtcMs\",System.currentTimeMillis());\\')\\nedit(u,\\'TextView\
+        \ label=new TextView(a);label.setText(share?\"SHARED HAND\":\"PET HAND\");\\',\\'TextView label=new TextView(a);label.setText(follow[0]>=0?\"\
+        FOLLOW: \"+targetName:(share?\"SHARED HAND\":\"PET HAND\"));\\')\\nedit(u,\\'                if(action!=android.view.MotionEvent.ACTION_DOWN&&action!=android.view.MotionEvent.ACTION_MOVE)return\
+        \ true;\\',\\'\\'\\'                if(action!=android.view.MotionEvent.ACTION_DOWN&&action!=android.view.MotionEvent.ACTION_MOVE)return\
+        \ true;\\n                if(follow[0]>=0){follow[0]=-1;label.setText(share?\"SHARED HAND\":\"PET HAND\"\
+        );}\\'\\'\\')\\nedit(u,\\'        center.setOnClickListener(v->{joy[0]=joy[1]=0;reset[0]=System.currentTimeMillis();pad.invalidate();live.send(true);});\\\
+        ',\\'        center.setOnClickListener(v->{follow[0]=-1;label.setText(share?\"SHARED HAND\":\"PET HAND\"\
+        );joy[0]=joy[1]=0;reset[0]=System.currentTimeMillis();pad.invalidate();live.send(true);});\\')\\nedit(u,\\\
+        '            actionButton(activity,visuals,\"Pet a player\",v->showPettingTargets(activity));\\',\\'\\'\\\
+        '            actionButton(activity,visuals,\"Shared hand • follow player\",v->chooseSharedHandFollow(activity,dialog));\\\
+        n            actionButton(activity,visuals,\"Pet a player\",v->showPettingTargets(activity));\\'\\'\\')\\\
+        nedit(u,\\'version.setText(\"v4.4.11\");\\',\\'version.setText(\"v4.4.12\");\\')\\n\\n\\n# v4.4.13: custom\
+        \ name pool on ordinary joins\\nfrom pathlib import Path\\n\\ndef replace_name(path, old, new):\\n    path=Path(path);\
+        \ s=path.read_text(encoding=\\'utf8\\'); assert s.count(old)==1,(str(path),old,s.count(old)); path.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n\\np=Path(\\'LobbyGuardian/Plugin/SessionExtras.cs\\')\\nreplace_name(p,\\'    private static\
+        \ string _requestedName=\"\";\\', \\'    private static string _requestedName=\"\", _lastSelectedName=\"\
+        \";\\')\\nreplace_name(p,\\'\\'\\'    private static bool RandomNamesEnabled()\\n    {\\n        try{using\
+        \ var doc=JsonDocument.Parse(File.ReadAllText(At(\"LobbyGuardian-spoof-options.json\")));\\n           \
+        \ return doc.RootElement.TryGetProperty(\"RandomizeNameOnJoin\",out var x)&&x.ValueKind==JsonValueKind.True;}\\\
+        n        catch{return false;}\\n    }\\'\\'\\',\\'\\'\\'    private static bool RandomNamesEnabled(out string[]\
+        \ names)\\n    {\\n        names=Array.Empty<string>();\\n        try{\\n            using var doc=JsonDocument.Parse(File.ReadAllText(At(\"\
+        LobbyGuardian-appearance.json\")));\\n            var root=doc.RootElement;\\n            if(!root.TryGetProperty(\"\
+        RandomizeNameOnJoin\",out var enabled)||enabled.ValueKind!=JsonValueKind.True)return false;\\n         \
+        \   if(root.TryGetProperty(\"JoinNamePool\",out var pool)&&pool.ValueKind==JsonValueKind.String){\\n   \
+        \             names=(pool.GetString()??\"\").Split(new[]{\\'\\\\\\\\r\\',\\'\\\\\\\\n\\',\\',\\'},StringSplitOptions.RemoveEmptyEntries)\\\
+        n                    .Select(n=>n.Trim()).Where(n=>n.Length>=1&&n.Length<=10&&n.All(c=>c==\\' \\'||(c>=\\\
+        'A\\'&&c<=\\'Z\\')||(c>=\\'a\\'&&c<=\\'z\\')||(c>=\\'0\\'&&c<=\\'9\\')))\\n                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(50).ToArray();\\\
+        n            }\\n            return true;\\n        }catch{return false;}\\n    }\\'\\'\\')\\nreplace_name(p,\\\
+        '    internal static void OnJoin(int id,string code)\\',\\'    internal static void OnJoin(int id,string\
+        \ code,bool allowName)\\')\\nreplace_name(p,\\'_joinAt.AddMilliseconds(650);_nameDone=false;\\', \\'_joinAt.AddSeconds(3);_nameDone=!allowName;\\\
+        ')\\nreplace_name(p,\\'if(!RandomNamesEnabled()){\\',\\'if(!RandomNamesEnabled(out var names)){\\')\\nreplace_name(p,\\\
+        'RandomizeNameOnJoin was never enabled in the game config: \"+At(\"LobbyGuardian-spoof-options.json\")\\\
+        ',\\'Randomize name on join is off or settings have not synced: \"+At(\"LobbyGuardian-appearance.json\"\
+        )\\')\\nreplace_name(p,\\'\\'\\'        string state=Get(GameBridge.Client,\"GameState\")?.ToString()??\"\
+        \";\\n        if(state.Equals(\"Started\",StringComparison.OrdinalIgnoreCase)){\\'\\'\\',\\'\\'\\'     \
+        \   if(names.Length==0){_nextName=now.AddSeconds(2);if(now-_joinAt>=TimeSpan.FromSeconds(24)){_nameDone=true;Status(\"\
+        name-list-empty\",\"Save at least one valid name in Network > Edit join names\");}return;}\\n        string\
+        \ state=Get(GameBridge.Client,\"GameState\")?.ToString()??\"\";\\n        if(state.Equals(\"Started\",StringComparison.OrdinalIgnoreCase)){\\\
+        '\\'\\')\\nreplace_name(p,\\'\\'\\'                string[] words={\"Nova\",\"Comet\",\"Orbit\",\"Pixel\"\
+        ,\"Clover\",\"Cosmo\",\"Mango\",\"Astro\",\"Panda\",\"Echo\"};\\n                _requestedName=words[Random.Shared.Next(words.Length)]+Random.Shared.Next(100,10000);\\\
+        '\\'\\',\\'\\'\\'                var choices=names.Where(n=>!n.Equals(current,StringComparison.OrdinalIgnoreCase)&&!n.Equals(_lastSelectedName,StringComparison.OrdinalIgnoreCase)).ToArray();\\\
+        n                if(choices.Length==0)choices=names.Where(n=>!n.Equals(current,StringComparison.OrdinalIgnoreCase)).ToArray();\\\
+        n                if(choices.Length==0){_nameDone=true;Status(\"name-unchanged\",\"Your current name is already\
+        \ the only saved name\");return;}\\n                _requestedName=choices[Random.Shared.Next(choices.Length)];\\\
+        n                _lastSelectedName=_requestedName;\\'\\'\\')\\n# Never change identity during automatic\
+        \ retry / vote loops. Manual ordinary joins still supported.\\nc=Path(\\'LobbyGuardian/Plugin/ClientFeatures.cs\\\
+        ')\\nreplace_name(c,\\'        SessionExtras.OnJoin(id,_lastCode);\\',\\'        SessionExtras.OnJoin(id,_lastCode,_voteCycle==VoteCycleStage.Idle\
+        \ && (_rejoinOrigin is \"normal-game-flow\" or \"current-room-button\" or \"recent-room-button\"));\\')\\\
+        n# Remove the dead, separate rejoin-name implementation, keeping level/reconnect protections unchanged.\\\
+        na=Path(\\'LobbyGuardian/Plugin/LobbyAppearance.cs\\')\\ns=a.read_text(encoding=\\'utf8\\'); start=s.index(\\\
+        '    private static void RandomizeAfterRejoin()\\'); end=s.index(\\'    // Local clone renderer utilities.\\\
+        ',start);s=s[:start]+s[end:];a.write_text(s,encoding=\\'utf8\\')\\nreplace_name(a,\\'        if(!_o.RandomizeNameOnRejoin\
+        \ || _normalIdentityAfterRejoin)return;\\\\n        _pendingName=true;_nextName=_rejoinIdentityGraceUntil;_nameExpires=_rejoinIdentityGraceUntil.AddSeconds(16);\\\
+        \\n\\',\\'\\')\\nreplace_name(a,\\'            RandomizeAfterRejoin();\\\\n\\',\\'\\')\\nu=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        ')\\nreplace_name(u,\\'            appearanceToggle(activity,network,identity,\"RandomizeNameOnRejoin\"\
+        ,\"Randomize my name on rejoin (optional)\");\\',\\'\\'\\'            appearanceToggle(activity,network,identity,\"\
+        RandomizeNameOnJoin\",\"Randomize my name on join\");\\n            actionButton(activity,network,\"Edit\
+        \ join names\",v->showJoinNamePool(activity));\\n            actionButton(activity,network,\"Last name change\
+        \ result\",v->{\\n                String result=read(config(\"LobbyGuardian-spoof-status.json\"),12000);\\\
+        n                new AlertDialog.Builder(activity).setTitle(\"Name change result\").setMessage(result==null||result.isEmpty()?\"\
+        No name request yet\":result).setPositiveButton(\"Close\",null).show();\\n            });\\'\\'\\')\\nreplace_name(u,\\\
+        '    private static CheckBox appearanceToggle(Activity a,LinearLayout panel,JSONObject settings,String key,String\
+        \ label){\\',\\'\\'\\'    private static void showJoinNamePool(Activity a){\\n        EditText input=new\
+        \ EditText(a);input.setSingleLine(false);input.setMinLines(5);input.setMaxLines(10);\\n        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);\\\
+        n        input.setHint(\"Nova\\\\\\\\nPixel\\\\\\\\nOrbit\\\\\\\\nEcho\");\\n        try{input.setText(new\
+        \ JSONObject(read(config(\"LobbyGuardian-appearance.json\"),12000)).optString(\"JoinNamePool\",\"\"));}catch(Exception\
+        \ ignored){}\\n        AlertDialog dialog=new AlertDialog.Builder(a).setTitle(\"Edit join names\")\\n  \
+        \          .setMessage(\"Enter up to 50 of your own names, one per line or separated by commas. Use 1–10\
+        \ letters, numbers or spaces per name. Normal game name rules apply.\")\\n            .setView(input).setPositiveButton(\"\
+        Save\",null).setNegativeButton(\"Cancel\",null).create();\\n        dialog.setOnShowListener(v->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(b->{\\\
+        n            java.util.LinkedHashMap<String,String> names=new java.util.LinkedHashMap<>();\\n          \
+        \  for(String raw:input.getText().toString().split(\"[\\\\\\\\\\\\\\\\r\\\\\\\\\\\\\\\\n,]+\")){\\n    \
+        \            String name=raw.trim();if(name.isEmpty())continue;\\n                if(!name.matches(\"[A-Za-z0-9\
+        \ ]{1,10}\")){input.setError(\"Invalid name: \"+name);return;}\\n                names.putIfAbsent(name.toLowerCase(java.util.Locale.ROOT),name);\\\
+        n            }\\n            if(names.size()>50){input.setError(\"Maximum 50 names\");return;}\\n      \
+        \      try{\\n                JSONObject settings;try{settings=new JSONObject(read(config(\"LobbyGuardian-appearance.json\"\
+        ),12000));}catch(Exception e){settings=new JSONObject();}\\n                settings.put(\"JoinNamePool\"\
+        ,android.text.TextUtils.join(\"\\\\\\\\n\",names.values()));\\n                writeClientFile(\"LobbyGuardian-appearance.json\"\
+        ,settings);\\n                Toast.makeText(a,\"Saved \"+names.size()+\" names\",Toast.LENGTH_SHORT).show();dialog.dismiss();\\\
+        n            }catch(Exception e){input.setError(\"Unable to save names\");}\\n        }));dialog.show();\\\
+        n    }\\n    private static CheckBox appearanceToggle(Activity a,LinearLayout panel,JSONObject settings,String\
+        \ key,String label){\\'\\'\\')\\n\\nreplace_name(u,\\'version.setText(\"v4.4.12\");\\',\\'version.setText(\"\
+        v4.4.13\");\\')\\n\\nfrom pathlib import Path\\n\\ndef rainbow_edit(path, old, new):\\n    s=path.read_text(encoding=\\\
+        'utf8\\'); assert s.count(old)==1,(str(path),old,s.count(old));path.write_text(s.replace(old,new,1),encoding=\\\
+        'utf8\\')\\n\\np=Path(\\'LobbyGuardian/Plugin/PlayerLookCopy.cs\\')\\nrainbow_edit(p,\\'    internal static\
+        \ void Shuffle(bool cosmetics){\\',\\'\\'\\'    // Slow native requests for our own color only; no forced\
+        \ or custom RPCs.\\n    internal static void RainbowOwnStep(){\\n        try{\\n            if(Read(GameBridge.Client,\"\
+        GameState\")?.ToString()!=\"Joined\")return;\\n            var pc=Find(\"PlayerControl\");var me=Read(pc,\"\
+        LocalPlayer\");if(me==null)return;\\n            int count=Number(Read(Read(Find(\"Palette\"),\"PlayerColors\"\
+        ),\"Length\",\"Count\"))??0;\\n            if(count<2||count>255)return;\\n            int current=Capture(me).Color??-1;\\\
+        n            var used=All(Read(pc,\"AllPlayerControls\")).Select(p=>Capture(p).Color).Where(c=>c.HasValue).Select(c=>c!.Value).ToHashSet();\\\
+        n            for(int i=1;i<=count;i++){\\n                int next=(current+i)%count;\\n               \
+        \ if(next==current||used.Contains(next))continue;\\n                RequestOwnColor(next);return;\\n   \
+        \         }\\n        }catch{}\\n    }\\n    internal static void Shuffle(bool cosmetics){\\'\\'\\')\\np=Path(\\\
+        'LobbyGuardian/Plugin/UtilityFull.cs\\')\\nrainbow_edit(p,\\'            GuardianRuntimeHealth.Run(\"PlayerLookCopy\"\
+        ,PlayerLookCopy.Tick);\\',\\'\\'\\'            GuardianRuntimeHealth.Run(\"PlayerLookCopy\",PlayerLookCopy.Tick);\\\
+        n            if(Option(\"RainbowMe\")||Option(\"RainbowAllLocal\")||_rainbowArt.Count>0)GuardianRuntimeHealth.Run(\"\
+        LobbyRainbow\",TickRainbow);\\'\\'\\')\\nrainbow_edit(p,\\'    private static void SeeGhosts()\\',\\'\\\
+        '\\'    private static readonly Dictionary<int,GhostArtState> _rainbowArt=new();\\n    private static long\
+        \ _rainbowNextArt,_rainbowNextOwn;\\n    private static int _rainbowPhase;\\n    private static readonly\
+        \ float[][] RainbowTints={new[]{1f,0.35f,0.35f},new[]{1f,0.65f,0.28f},new[]{1f,1f,0.35f},new[]{0.35f,1f,0.5f},new[]{0.35f,0.85f,1f},new[]{0.55f,0.45f,1f},new[]{1f,0.45f,0.85f}};\\\
+        n    private static void ClearRainbowArt(){\\n        foreach(var entry in _rainbowArt.Values)try{RestoreGhostArt(entry);}catch{}\\\
+        n        _rainbowArt.Clear();\\n    }\\n    private static void TickRainbow(){\\n        string state=Get(GameBridge.Client,\"\
+        GameState\")?.ToString()??\"\";\\n        if(state!=\"Joined\"&&state!=\"Lobby\"){ClearRainbowArt();return;}\\\
+        n        long now=Environment.TickCount64;\\n        bool all=Option(\"RainbowAllLocal\")&&GameBridge.IsHost();\\\
+        n        if(!all){\\n            if(_rainbowArt.Count>0)ClearRainbowArt();\\n            if(Option(\"RainbowMe\"\
+        )&&now>=_rainbowNextOwn){_rainbowNextOwn=now+5000;PlayerLookCopy.RainbowOwnStep();}\\n            return;\\\
+        n        }\\n        if(now<_rainbowNextArt)return;_rainbowNextArt=now+500;\\n        var tint=RainbowTints[_rainbowPhase++%RainbowTints.Length];\\\
+        n        var seen=new HashSet<int>();var pc=FindType(\"PlayerControl\");var sprite=FindType(\"UnityEngine.SpriteRenderer\"\
+        );\\n        if(pc==null||sprite==null){ClearRainbowArt();return;}\\n        foreach(var player in All(Get(pc,\"\
+        AllPlayerControls\"))){\\n            try{\\n                var data=Get(player,\"Data\",\"data\");if(data==null||Bool(data,\"\
+        Disconnected\"))continue;\\n                var c=Get(player,\"cosmetics\",\"Cosmetics\",\"cosmeticsLayer\"\
+        );var body=Get(c,\"currentBodySprite\",\"CurrentBodySprite\");\\n                var sr=new[]{Get(body,\"\
+        BodySprite\",\"bodySprite\"),Get(player,\"MyRend\",\"myRend\"),Get(c,\"bodySprite\",\"BodySprite\")}.FirstOrDefault(r=>r!=null&&sprite.IsInstanceOfType(r)&&Get(r,\"\
+        sprite\")!=null);\\n                if(sr==null)continue;\\n                int id=LobbyAppearance.VisualId(sr);if(!seen.Add(id))continue;\\\
+        n                var current=Get(sr,\"color\");if(current==null)continue;\\n                var original=_rainbowArt.TryGetValue(id,out\
+        \ var old)&&SameVisualColor(current,old.Applied)?old.Original:current;\\n                var ctor=current.GetType().GetConstructor(new[]{typeof(float),typeof(float),typeof(float),typeof(float)});if(ctor==null)continue;\\\
+        n                var next=ctor.Invoke(new object[]{tint[0],tint[1],tint[2],VisualFloat(original,\"a\")});\\\
+        n                if(WriteVisualMember(sr,\"color\",next))_rainbowArt[id]=new GhostArtState(sr,original,next);\\\
+        n            }catch{}\\n        }\\n        foreach(int id in _rainbowArt.Keys.Where(k=>!seen.Contains(k)).ToArray()){\\\
+        n            try{RestoreGhostArt(_rainbowArt[id]);}catch{} _rainbowArt.Remove(id);\\n        }\\n    }\\\
+        n    private static void SeeGhosts()\\'\\'\\')\\nu=Path(\\'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\\
+        ')\\nrainbow_edit(u,\\'            section(activity,visuals,\"Local lobby visuals\",\"These effects are\
+        \ client-side and may be unavailable in some game versions.\");\\',\\'\\'\\'            section(activity,visuals,\"\
+        Rainbow colors\",\"Rainbow Me requests an available native color every 5 seconds. Rainbow All is a host-only\
+        \ local tint preview, not visible to other clients. Both stop outside the lobby.\");\\n            rainbowToggle(activity,visuals,\"\
+        RainbowMe\",\"Rainbow Me (host or non-host)\");\\n            rainbowToggle(activity,visuals,\"RainbowAllLocal\"\
+        ,\"Rainbow All (host only, local preview)\");\\n            section(activity,visuals,\"Local lobby visuals\"\
+        ,\"These effects are client-side and may be unavailable in some game versions.\");\\'\\'\\')\\nrainbow_edit(u,\\\
+        '    private static JSONObject readClientSettings() throws Exception {\\',\\'\\'\\'    private static void\
+        \ rainbowToggle(Activity a,LinearLayout panel,String key,String label){\\n        CheckBox cb=new CheckBox(a);cb.setText(label);cb.setTextColor(Color.WHITE);\\\
+        n        cb.setChecked(utilityJson(a,\"LobbyGuardian-utility-options.json\").optBoolean(key,false));\\n\
+        \        final boolean[] changing={false};cb.setOnCheckedChangeListener((v,on)->{\\n            if(changing[0])return;\\\
+        n            try{\\n                File f=utilityFile(a,\"LobbyGuardian-utility-options.json\"),dir=f.getParentFile();\\\
+        n                if(dir==null||(!dir.isDirectory()&&!dir.mkdirs()))throw new IllegalStateException();\\\
+        n                JSONObject current=f.exists()?new JSONObject(read(f,262144)):new JSONObject();current.put(key,on);\\\
+        n                android.util.AtomicFile atomic=new android.util.AtomicFile(f);FileOutputStream out=null;\\\
+        n                try{out=atomic.startWrite();out.write(current.toString(2).getBytes(StandardCharsets.UTF_8));atomic.finishWrite(out);}\\\
+        n                catch(Exception ex){if(out!=null)atomic.failWrite(out);throw ex;}\\n            }catch(Exception\
+        \ ex){changing[0]=true;cb.setChecked(!on);changing[0]=false;Toast.makeText(a,\"Could not save rainbow setting\"\
+        ,Toast.LENGTH_SHORT).show();}\\n        });panel.addView(cb);\\n    }\\n    private static JSONObject readClientSettings()\
+        \ throws Exception {\\'\\'\\')\\n\\nrainbow_edit(u,\\'version.setText(\"v4.4.13\");\\',\\'version.setText(\"\
+        v4.4.16\");\\')\\n\\nfrom pathlib import Path\\nimport re\\n\\ndef moderator_edit(path, old, new):\\n  \
+        \  s=path.read_text(encoding=\\'utf8\\')\\n    assert s.count(old)==1,(str(path),old,s.count(old))\\n  \
+        \  path.write_text(s.replace(old,new,1),encoding=\\'utf8\\')\\n\\np=Path(\\'LobbyGuardian/Plugin\\')\\ng=p/\\\
+        'GameBridge.cs\\'\\nmoderator_edit(g,\\'        p.Platform = Str(data, \"Platform\", \"PlatformData.Platform\"\
+        );\\',\\'        p.Platform = Str(data, \"PlatformData.Platform\", \"Platform\", \"Character.Data.PlatformData.Platform\"\
+        , \"Character.Data.Platform\");\\')\\nmoderator_edit(g,\\'        p.Level = Int(data, \"PlayerLevel\", \"\
+        Level\", \"Character.Data.PlayerLevel\");\\',\\'        p.Level = Int(data, \"PlayerLevel\", \"Level\",\
+        \ \"Character.Data.PlayerLevel\", \"Character.Data.Level\");\\')\\nmoderator_edit(g,\\'                item.ColorId\
+        \ ??= Int(pc, \"Data.DefaultOutfit.ColorId\", \"Data.ColorId\");\\',\\'\\'\\'                item.ColorId\
+        \ ??= Int(pc, \"Data.DefaultOutfit.ColorId\", \"Data.ColorId\");\\n                item.Level ??= Int(pc,\
+        \ \"Data.PlayerLevel\", \"Data.Level\");\\n                if(string.IsNullOrWhiteSpace(item.Platform))\\\
+        n                    item.Platform=Str(pc,\"Data.PlatformData.Platform\",\"Data.Platform\",\"PlatformData.Platform\"\
+        ,\"Platform\");\\'\\'\\')\\nq=p/\\'LobbyChatCommands.cs\\'\\nmoderator_edit(q,\\'\\'\\'        var p=client.GetType().GetProperty(\"\
+        GameState\",System.Reflection.BindingFlags.Public|\\n            System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);\\\
+        n        return p?.GetValue(client)?.ToString()==\"Joined\";\\'\\'\\',\\'\\'\\'        const System.Reflection.BindingFlags\
+        \ flags=System.Reflection.BindingFlags.Public|\\n            System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;\\\
+        n        var t=client.GetType();\\n        return (t.GetProperty(\"GameState\",flags)?.GetValue(client)??t.GetField(\"\
+        GameState\",flags)?.GetValue(client))?.ToString() is \"Joined\" or \"Lobby\" or \"1\";\\'\\'\\')\\n# Separate\
+        \ roster lookup from UI so an authenticated host can use the same resolver.\\nmoderator_edit(q,\\'\\'\\\
+        '        var roster=GameBridge.ReadVotingRoster().Where(x=>x.ClientId>=0&&x.Name!=\"Host (loading)\").ToArray();\\\
+        '\\'\\',\\'\\'\\'        var player=ResolveInfo(query);\\n        if(player==null){Notice(\"No unique player\
+        \ found; use color, name:ExactName or #clientID\");return;}\\n        ShowInfo(player);\\n    }\\n    internal\
+        \ static PlayerIdentity? ResolveInfo(string query){\\n        query=query.Trim();if(query.Length==0)return\
+        \ null;\\n        var roster=GameBridge.ReadVotingRoster().Where(x=>x.ClientId>=0&&x.Name!=\"Host (loading)\"\
+        ).ToArray();\\'\\'\\')\\nmoderator_edit(q,\\'\\'\\'        if(matches.Length!=1){Notice(\"No unique player\
+        \ found; use color, name:ExactName or #clientID\");return;}\\n        var player=matches[0];\\n        WhisperRelay.LocalChatNotice(\"\
+        [LG • Private info] \"+SafeInfo(player.Name,40)+\" | \"+ChatModerators.ColorName(player.ColorId)+\" | Platform:\
+        \ \"+SafeInfo(player.Platform,40)+\" | Level: \"+(player.Level?.ToString()??\"Unavailable\")+\" | Client\
+        \ ID: \"+player.ClientId+(player.IsHost?\" | Host\":\"\"),false);\\n        WhisperRelay.LocalChatNotice(\"\
+        [LG • Only you] Friend code: \"+SafeInfo(player.FriendCode)+\" | PUID: \"+SafeInfo(player.Puid,100),false);\\\
+        '\\'\\',\\'\\'\\'        return matches.Length==1?matches[0]:null;\\n    }\\n    internal static string\
+        \ PublicInfo(PlayerIdentity player)=>SafeInfo(player.Name,24)+\" | Platform: \"+SafeInfo(player.Platform,20)+\"\
+        \ | Level: \"+(player.Level?.ToString()??\"Unavailable\");\\n    internal static void ShowInfo(PlayerIdentity\
+        \ player){\\n        WhisperRelay.LocalChatNotice(\"[LG • Private info] \"+PublicInfo(player)+\" | \"+ChatModerators.ColorName(player.ColorId)+\"\
+        \ | Client ID: \"+player.ClientId+(player.IsHost?\" | Host\":\"\"),false);\\n        WhisperRelay.LocalChatNotice(\"\
+        [LG • Only you] Friend code: \"+SafeInfo(player.FriendCode)+\" | PUID: \"+SafeInfo(player.Puid,100),false);\\\
+        '\\'\\')\\nw=p/\\'WhisperRelay.cs\\'\\nmoderator_edit(w,\\'\\'\\'        if(head is \"/info\" or \"/c\"\
+        \ or \"/color\"){LobbyChatCommands.TryHandle(raw);return false;}\\'\\'\\',\\'\\'\\'        if(head is \"\
+        /help\" or \"/h\" or \"/lghelp\" or \"/chathelp\"){\\n            if(raw.Equals(head,StringComparison.OrdinalIgnoreCase)){ShowLocalHelp();return\
+        \ false;}\\n        }\\n        if(head is \"/info\" or \"/c\" or \"/color\"){LobbyChatCommands.TryHandle(raw);return\
+        \ false;}\\'\\'\\')\\nmoderator_edit(w,\\'            LocalChatNotice(HelpText);return false;\\',\\'   \
+        \         ShowLocalHelp();return false;\\')\\n# Keep the existing full help text constant and split it before\
+        \ display, rather than truncating at 220.\\nmoderator_edit(w,\\'    private static bool CloneCommand(string\
+        \ raw)\\',\\'\\'\\'    private static void ShowLocalHelp(){\\n        string remaining=HelpText;\\n    \
+        \    while(remaining.Length>0){\\n            int len=Math.Min(180,remaining.Length);\\n            if(len<remaining.Length){int\
+        \ split=remaining.LastIndexOf(\\' \\',len-1,len);if(split>0)len=split;}\\n            LocalChatNotice(remaining[..len]);remaining=remaining[len..].TrimStart();\\\
+        n        }\\n    }\\n    private static bool CloneCommand(string raw)\\'\\'\\')\\n# Bounded ordinary chat\
+        \ feedback for authorized remote read-only requests. No targeted RPC and no private ID in ordinary chat.\\\
+        nmoderator_edit(w,\\'    private static bool TrySendChat(string text)\\',\\'\\'\\'    private static readonly\
+        \ Queue<(string Room,DateTimeOffset At,string Text)> _moderatorReplies=new();\\n    private static DateTimeOffset\
+        \ _nextModeratorReply;\\n    internal static void QueueModeratorReply(string text){\\n        string room=Member(GameBridge.Client,\"\
+        GameId\")?.ToString()??\"\";\\n        if(!GameBridge.IsHost()||room==\"\"||room==\"0\"||room==\"-1\"||_moderatorReplies.Count>=6)return;\\\
+        n        text=Clean(text);if(text.Length>100)text=text[..100];\\n        _moderatorReplies.Enqueue((room,DateTimeOffset.UtcNow,text));\\\
+        n    }\\n    private static void FlushModeratorReply(){\\n        if(_moderatorReplies.Count==0)return;\\\
+        n        string room=Member(GameBridge.Client,\"GameId\")?.ToString()??\"\";\\n        string state=Member(GameBridge.Client,\"\
+        GameState\")?.ToString()??\"\";\\n        if(!GameBridge.IsHost()||state!=\"Joined\"&&state!=\"Lobby\"&&state!=\"\
+        1\"){_moderatorReplies.Clear();return;}\\n        var now=DateTimeOffset.UtcNow;\\n        if(now<_nextModeratorReply)return;\\\
+        n        while(_moderatorReplies.Count>0){\\n            var next=_moderatorReplies.Dequeue();\\n      \
+        \      if(next.Room!=room||now-next.At>TimeSpan.FromSeconds(12))continue;\\n            _nextModeratorReply=now.AddSeconds(2);TrySendChat(next.Text);break;\\\
+        n        }\\n    }\\n    private static bool TrySendChat(string text)\\'\\'\\')\\nmoderator_edit(w,\\' \
+        \       FlushLocalChatNotices();\\\\n        if(DateTimeOffset.UtcNow-_lastCommand\\',\\'        FlushLocalChatNotices();\\\
+        \\n        FlushModeratorReply();\\\\n        if(DateTimeOffset.UtcNow-_lastCommand\\')\\nm=p/\\'ChatModerators.cs\\\
+        '\\nmoderator_edit(m,\\'or \"clones\" or \"help\" or \"rolerate\"))return false;\\',\\'or \"clones\" or\
+        \ \"help\" or \"info\" or \"rolerate\"))return false;\\')\\ns=m.read_text(encoding=\\'utf8\\'); old=next(line\
+        \ for line in s.splitlines() if \\'if(action==\"help\"){Status(\"chat-help\"\\' in line)\\nmoderator_edit(m,old,\\\
+        '\\'\\'            if(action is \"help\" or \"info\"){\\n                if(!Pregame()||!int.TryParse((Member(sender,\"\
+        OwnerId\")??Member(sender,\"ownerId\"))?.ToString(),out int readId)||!Connected(readId,friendCode))return;\\\
+        n                if(!Cooldown(friendCode,\"read-help-info\",4))return;\\n                if(action==\"help\"\
+        ){\\n                    WhisperRelay.QueueModeratorReply(\"[LG] /info red, /k red, /b blue, /speed 1.25,\
+        \ /vote 60. Host permissions apply.\");\\n                    WhisperRelay.QueueModeratorReply(\"[LG] /clones\
+        \ heart 12, /clearclones, /s, /tb green 5. Use !lg help if slash fails.\");\\n                    Status(\"\
+        chat-help\",\"Moderator help queued via normal chat\");return;\\n                }\\n                var\
+        \ info=LobbyChatCommands.ResolveInfo(arg);\\n                if(info==null){WhisperRelay.QueueModeratorReply(\"\
+        [LG] No unique player. Use /info color, name:ExactName or #clientID.\");return;}\\n                LobbyChatCommands.ShowInfo(info);\\\
+        n                WhisperRelay.QueueModeratorReply(\"[LG] \"+LobbyChatCommands.PublicInfo(info));\\n    \
+        \            Status(\"chat-info\",\"Public roster summary queued; identifiers remain local\");return;\\\
+        n            }\\'\\'\\')\\n# Update the menu help and keep local-only rainbow explicitly labelled.\\nu=Path(\\\
+        'fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java\\')\\n# Version is changed in\
+        \ the preceding v4.4.14 patch, not in the v4.4.11 test fixture.\\ns=u.read_text(encoding=\\'utf8\\')\\nfor\
+        \ old in (\\'/info red (private local reply on your device, no host needed)\\',):\\n    assert s.count(old)==1\\\
+        n    s=s.replace(old,\\'/help (local command list), /info red (local platform, level and IDs; unmodded requests\
+        \ get public platform/level only)\\')\\nu.write_text(s,encoding=\\'utf8\\')\\n\\n\\n# 4.4.16: normal chat\
+        \ requests from authorized vanilla clients; no client plugin required.\\nm=p/\\'ChatModerators.cs\\'; w=p/\\\
+        'WhisperRelay.cs\\'; q=p/\\'LobbyChatCommands.cs\\'\\nmoderator_edit(m,\\'\\'\\'        .FirstOrDefault(m=>m.Name==\"\
+        AddChat\" && m.GetParameters().Length>=2 &&\\n            m.GetParameters().Any(p=>p.ParameterType==typeof(string)));\\\
+        '\\'\\',\\'\\'\\'        .Where(m=>m.Name==\"AddChat\" && m.GetParameters().Length>=2 &&\\n            m.GetParameters().Any(p=>p.ParameterType==typeof(string)))\\\
+        n        .OrderByDescending(m=>m.GetParameters().Any(p=>p.ParameterType.Name==\"PlayerControl\"))\\n   \
+        \     .ThenBy(m=>m.GetParameters().Length).FirstOrDefault();\\'\\'\\')\\nmoderator_edit(m,\\'is \"Joined\"\
+        \ or \"Lobby\");\\',\\'is \"Joined\" or \"Lobby\" or \"1\");\\')\\nmoderator_edit(m,\\'if(message is null||message.Length<3||message.Length>160)return;\\\
+        ',\\'if(message is null||message.Length<2||message.Length>160)return;\\')\\nmoderator_edit(m,\\'\\'\\' \
+        \           string friendCode=(GetPath(sender,\"Data.FriendCode\")?.ToString() ?? \"\").Trim();\\n     \
+        \       if(string.IsNullOrWhiteSpace(friendCode)){Status(\"chat-ignored\",\"Sender has no stable Friend\
+        \ Code\");return;}\\'\\'\\',\\'\\'\\'            // Resolve the real connected client by OwnerId, never\
+        \ by display name or chat content.\\n            if(!int.TryParse((Member(sender,\"OwnerId\")??Member(sender,\"\
+        ownerId\"))?.ToString(),out int senderId)||senderId<0){Status(\"chat-ignored\",\"Missing sender owner ID\"\
+        );return;}\\n            var senderRecord=GameBridge.ReadVotingRoster().FirstOrDefault(x=>x.ClientId==senderId&&!x.IsLocal&&!x.IsHost);\\\
+        n            string friendCode=senderRecord?.FriendCode?.Trim()??\"\";\\n            string dataCode=(GetPath(sender,\"\
+        Data.FriendCode\")?.ToString()??\"\").Trim();\\n            if(friendCode.Length==0||(dataCode.Length>0&&!string.Equals(friendCode,dataCode,StringComparison.OrdinalIgnoreCase))){Status(\"\
+        chat-ignored\",\"Sender identity could not be verified\");return;}\\'\\'\\')\\nmoderator_edit(m,\\'\\'\\\
+        '                    WhisperRelay.QueueModeratorReply(\"[LG] /info red, /k red, /b blue, /speed 1.25, /vote\
+        \ 60. Host permissions apply.\");\\n                    WhisperRelay.QueueModeratorReply(\"[LG] /clones\
+        \ heart 12, /clearclones, /s, /tb green 5. Use !lg help if slash fails.\");\\'\\'\\',\\'\\'\\'         \
+        \           WhisperRelay.QueueModeratorReply(\"[LG] /info red, /k red, /b blue, /tb green 5. Host permissions\
+        \ apply.\");\\n                    WhisperRelay.QueueModeratorReply(\"[LG] /speed 1.25, /vote 60, /discuss\
+        \ 30, /players 15, /imps 2.\");\\n                    WhisperRelay.QueueModeratorReply(\"[LG] /crewvision\
+        \ 1, /impvision 1.5, /kc 30, /kd 1, /meetings 2, /ec 15.\");\\n                    WhisperRelay.QueueModeratorReply(\"\
+        [LG] /common 1, /long 2, /short 3, /rolerate Engineer 1 100, /s.\");\\n                    WhisperRelay.QueueModeratorReply(\"\
+        [LG] /clones heart 12, /clearclones, /d, /r (private layout/clones only).\");\\n                    WhisperRelay.QueueModeratorReply(\"\
+        [LG] If slash is blocked, use !lg help, !lg info red, or !lg followed by the command.\");\\'\\'\\')\\nmoderator_edit(m,\\\
+        '    private static DateTimeOffset _lastAt;\\',\\'    private static DateTimeOffset _lastAt;\\\\n    private\
+        \ static bool _replyToModerator;\\')\\nmoderator_edit(m,\\'\\'\\'    {try{File.WriteAllText(At(\"LobbyGuardian-moderator-status.json\"\
+        ),JsonSerializer.Serialize(new{\\n        stage,message,atUtc=DateTimeOffset.UtcNow.ToString(\"O\") }));}catch{}}\\\
+        '\\'\\',\\'\\'\\'    {try{File.WriteAllText(At(\"LobbyGuardian-moderator-status.json\"),JsonSerializer.Serialize(new{\\\
+        n        stage,message,atUtc=DateTimeOffset.UtcNow.ToString(\"O\") }));}catch{}\\n        // Only return\
+        \ generic action status for an authenticated moderator request.\\n        if(!_replyToModerator)return;\\\
+        n        string feedback=stage switch {\\n            \"chat-denied\"=>\"Command denied by host permissions\
+        \ or lobby rules.\",\\n            \"chat-invalid\"=>\"Invalid command or arguments. Try !lg help.\",\\\
+        n            \"chat-rate-limit\"=>\"Please wait before trying another command.\",\\n            \"chat-busy\"\
+        =>\"Another request is pending; try again shortly.\",\\n            \"chat-target-missing\"=>\"No eligible\
+        \ unique target. Use color or exact name.\",\\n            \"chat-queued\"=>\"Host received and queued the\
+        \ request; execution not confirmed.\",\\n            \"chat-requested\"=>\"Host sent the request; execution\
+        \ not confirmed.\",\\n            \"chat-error\"=>\"Host command could not complete. Ask the host to check\
+        \ diagnostics.\",\\n            _=>\"\"};\\n        if(feedback.Length>0)WhisperRelay.QueueModeratorReply(\"\
+        [LG] \"+feedback);\\n    }\\'\\'\\')\\nmoderator_edit(m,\\'            _lastAt=DateTimeOffset.UtcNow;_lastKey=key;\\\
+        ',\\'            _lastAt=DateTimeOffset.UtcNow;_lastKey=key;\\\\n            _replyToModerator=true;\\')\\\
+        nmoderator_edit(m,\\'        } catch(Exception ex) {Status(\"chat-error\",ex.GetType().Name+\": \"+ex.Message);}\\\
+        ',\\'        } catch(Exception ex) {Status(\"chat-error\",ex.GetType().Name+\": \"+ex.Message);}\\\\n  \
+        \      finally{_replyToModerator=false;}\\')\\n# Six short help messages take at most ten seconds, within\
+        \ the 12s stale timeout.\\n# Keep room scoping, bounded queue and normal native chat rate limit.\\nmoderator_edit(w,\\\
+        '            _nextModeratorReply=now.AddSeconds(2);TrySendChat(next.Text);break;\\',\\'\\'\\'          \
+        \  _nextModeratorReply=now.AddSeconds(2);\\n            if(!TrySendChat(next.Text))ChatModerators.HookStatus(\"\
+        chat-reply-unavailable\",\"Native chat send unavailable; reply not sent\");\\n            break;\\'\\'\\\
+        ')\\n# Metadata remains visible to all recipients of ordinary chat; never broadcast account IDs.\\nmoderator_edit(q,\\\
+        'internal static string PublicInfo(PlayerIdentity player)=>SafeInfo(player.Name,24)+\" | Platform: \"+SafeInfo(player.Platform,20)+\"\
+        \ | Level: \"+(player.Level?.ToString()??\"Unavailable\");\\',\\'internal static string PublicInfo(PlayerIdentity\
+        \ player)=>SafeInfo(player.Name,18)+\" | Platform: \"+SafeInfo(player.Platform,20)+\" | Level: \"+(player.Level?.ToString()??\"\
+        Unavailable\")+\" | \"+ChatModerators.ColorName(player.ColorId);\\')\\nmoderator_edit(u,\\'/help (local\
+        \ command list), /info red (local platform, level and IDs; unmodded requests get public platform/level only)\\\
+        ',\\'/help and /info red work for approved moderators without LG through ordinary free chat; use !lg help\
+        \ or !lg info red if slash is blocked. Platform/level replies are room-visible; IDs stay on host device\\\
+        ')\\n'\nbase_line=\"base=yaml.safe_load(Path('.github/workflows/lobbyguardian-v4382-fps-match-transition.yml').read_text())['jobs']['android']['steps']\"\
+        \nextra_checks=\"\\nfor step in base:\\n    if step.get('name')=='Compile final patched plugin and verify\
+        \ embedded binary':\\n        step['run']=step['run'].replace('LobbyGuardian-frame-health.json','LobbyGuardian-start-action-result.json')\\\
+        n\"\ninjection='old=old.replace('+repr(base_line)+','+repr(base_line+extra_checks)+',1)\\ninsert += '+repr(repair+'\\\
+        n')+'\\n'\n# Existing 4394 run has already applied its nested script transformations here.\nouter_add =\
+        \ 'anchor=\"script=old.replace(marker,insert+marker,1)\"\\nassert script.count(anchor)==1\\nscript=script.replace(anchor,'+repr(injection)+'+anchor,1)\\\
+        n'\n# Replace the expected *compiled* FPS marker in the inner validation, after\n# the 4394 nested replacement\
+        \ has run. Keep every patch context unchanged.\nold_tuple=\"('Native pacing (no mod override)',\"\nnew_tuple=\"\
+        ('LobbyGuardian-start-action-result.json',\"\n# In the middle script the tuple is itself a string literal\
+        \ used for replacement.\nouter_add += 'assert script.count('+repr(old_tuple)+')==1\\nscript=script.replace('+repr(old_tuple)+','+repr(new_tuple)+',1)\\\
+        n'\nrun=run.replace(needle,'\\n'+outer_add+'execute(script)\\n',1)\nrun=run.replace(\".replace('30 FPS target\
+        \ applied','Native pacing (no mod override)')\", \".replace('30 FPS target applied','LobbyGuardian-start-action-result.json')\"\
+        ,1)\nwith tempfile.TemporaryDirectory() as tmp:\n    p=Path(tmp)/'rebuild.sh';p.write_text(run,encoding='utf8')\n\
+        \    subprocess.run(['bash','-n',str(p)],check=True)\n    subprocess.run(['bash','-eo','pipefail',str(p)],check=True)\n\
+        PY_4395\n"
+    - name: Verify no frame monitor and exact APK plugin
+      shell: bash
+      run: "python3 - <<'PY_VERIFY'\nfrom pathlib import Path\nimport io,zipfile\np=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll');dll=p.read_bytes()\n\
+        for token in ('LobbyGuardian-frame-health.json','get_targetFrameRate','set_targetFrameRate','startEligible'):\n\
+        \    assert token.encode('utf-16le') not in dll,token\nfor token in ('#FF4545','LobbyGuardian-start-action-result.json','color:red','/k\
+        \ red','/rolerate Engineer 1 100'):\n    assert token.encode('utf-16le') in dll,token\napks=list(Path('fusionApp/build/outputs/apk/debug').glob('*.apk'));assert\
+        \ apks\nfor apk in apks:\n    with zipfile.ZipFile(apk) as z,zipfile.ZipFile(io.BytesIO(z.read('assets/BepInEx-arm64.zip')))\
+        \ as b:\n        n=[x for x in b.namelist() if x.endswith('plugins/LobbyGuardian.Plugin.dll')];assert len(n)==1\
+        \ and b.read(n[0])==dll\nprint('Verified no FPS telemetry and matching compiled APK plugin')\nPY_VERIFY\n\
+        \npython3 - <<'PY'\nfrom pathlib import Path\nb=Path(\"LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll\"\
+        ).read_bytes()\nfor marker in (\"/info\",\"/color\",\"Native color request unavailable.\"):\n    assert\
+        \ marker.encode(\"utf-16le\") in b, marker\nPY\n\npython3 - <<'PY_NO_FX'\nfrom pathlib import Path\nplugin=Path('LobbyGuardian/Plugin')\n\
+        ui=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java').read_text()\nb=Path('LobbyGuardian/bin/Release/net10.0/LobbyGuardian.Plugin.dll').read_bytes()\n\
+        assert not (plugin/'LobbyCosmeticFx.cs').exists()\nfor token in ('LobbyGuardian-cosmetic-fx-command.json','Appearance\
+        \ FX: ','Color preview: ','Skin preview','Look preview: '):\n    assert token.encode('utf-16le') not in\
+        \ b, token\nfor token in ('Lookalike Formation (LG FX)','appearanceFxMenu','cosmeticFxMenu','Cosmetic Elimination','Reset\
+        \ Appearance / Replicas','Everyone’s Look',\"Everyone's Look\"):\n    assert token not in ui, token\nprint('LG-only\
+        \ cosmetic effects absent; earlier APK verification retained')\nPY_NO_FX\n\npython3 - <<'PY_4409'\nfrom\
+        \ pathlib import Path\nroot=Path('fusionApp/src/main/java/dev/allofus/fusioncore')\nassert not any('Show\
+        \ host Start button' in p.read_text(encoding='utf8') for p in root.rglob('*.java'))\ns=Path('LobbyGuardian/Plugin/LobbyAppearance.cs').read_text()\n\
+        assert 'SharedCloneLimit=50' in s and '_sharedNext=now.AddMilliseconds(750)' in s\nassert 'SharedTextPoints'\
+        \ in s and 'SharedShapePoint' in s\nPY_4409\n\npython3 - <<'PY_4410'\nfrom pathlib import Path\np=Path('LobbyGuardian/Plugin')\n\
+        s=(p/'LobbyAppearance.cs').read_text()\nassert '_sharedPrivateOnly' not in s and 'New shapes and text require\
+        \ a private' not in s\nassert 'SharedCloneLimit=50' in s and '_sharedNext=now.AddMilliseconds(750)' in s\n\
+        assert 'if(!GameBridge.IsHost())return \"You must be the host\"' in s\nfor f in ('HostLobbyClose.cs','LobbyChatCommands.cs'):\n\
+        \    assert 'if(!ChatModerators.PrivateRoom())' not in (p/f).read_text()\nassert 'if((permission==\"AllowLobbyLayout\"\
+        ||permission==\"AllowSharedClones\")&&!PrivateRoom())return false;' in (p/'ChatModerators.cs').read_text()\n\
+        PY_4410\n\npython3 - <<'PY_COUNTS'\nfrom pathlib import Path\ns=Path('LobbyGuardian/Plugin/LobbyAppearance.cs').read_text()\n\
+        u=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java').read_text()\nassert 'textPoints.Count>count'\
+        \ in s and 'if(textPoints!=null)count=textPoints.Count;' in s\nassert 'counts={6,12,16,20,30,40,50}' in\
+        \ u and 'budgets={20,30,40,50}' in u\nassert 'version.setText(\"v4.4.16\");' in u\nprint('Verified selectable\
+        \ clone counts and text budget; pacing unchanged')\nPY_COUNTS\n\npython3 - <<'PY_PET_HOLD'\nfrom pathlib\
+        \ import Path\ns=Path('LobbyGuardian/Plugin/PettingHand.cs').read_text()\nu=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java').read_text()\n\
+        assert '_handAnchored' in s and 'FollowPosition(playerType,_activeFollow)' in s\nassert 'SharePetAllowed(client)?requested:-1'\
+        \ in s and '_nextSharedPet=now.AddMilliseconds(300)' in s\nassert 'followClientId' in u and 'Shared hand\
+        \ • follow player' in u\nassert 'if(_activeFollow<0){_handX=destX;_handY=destY;}' in s\nprint('Verified\
+        \ pet hold and follow source, with existing shared gesture pacing')\nPY_PET_HOLD\n\npython3 - <<'PY_NAMES'\n\
+        from pathlib import Path\np=Path('LobbyGuardian/Plugin/SessionExtras.cs').read_text()\nu=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java').read_text()\n\
+        assert 'JoinNamePool' in p and 'JoinNamePool' in u\nassert 'RandomizeNameOnJoin' in p and 'RandomizeNameOnJoin'\
+        \ in u\nassert 'LobbyGuardian-spoof-options.json' not in p\nassert 'RandomizeAfterRejoin();' not in Path('LobbyGuardian/Plugin/LobbyAppearance.cs').read_text()\n\
+        assert 'Edit join names' in u\nprint('Verified join name settings and saved pool wiring')\nPY_NAMES\n\n\
+        python3 - <<'PY_RAINBOW'\nfrom pathlib import Path\np=Path('LobbyGuardian/Plugin')\ns=(p/'UtilityFull.cs').read_text();u=Path('fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java').read_text();c=(p/'PlayerLookCopy.cs').read_text()\n\
+        assert 'RainbowAllLocal' in s and 'RainbowMe' in s and 'RainbowAllLocal' in u and 'RainbowMe' in u\nassert\
+        \ 'now+5000' in s and 'ClearRainbowArt' in s and 'RequestOwnColor(next)' in c\nPY_RAINBOW\n\npython3 - <<'PY_MODERATOR'\n\
+        from pathlib import Path\np=Path('LobbyGuardian/Plugin')\nw=(p/'WhisperRelay.cs').read_text();m=(p/'ChatModerators.cs').read_text();g=(p/'GameBridge.cs').read_text();q=(p/'LobbyChatCommands.cs').read_text()\n\
+        assert 'ShowLocalHelp();return false;' in w and 'FlushModeratorReply();' in w\nassert 'or \"help\" or \"\
+        info\" or \"rolerate\"' in m and 'LobbyChatCommands.ShowInfo(info)' in m\nassert 'item.Level ??=' in g and\
+        \ 'item.Platform=Str(pc' in g\nassert 'internal static string PublicInfo' in q and 'internal static void\
+        \ ShowInfo' in q\nassert 'QueueModeratorReply(\"[LG] \"+LobbyChatCommands.PublicInfo(info))' in m\nprint('Moderator\
+        \ help, local metadata and bounded ordinary-chat replies verified in source')\nPY_MODERATOR\n\npython3 -\
+        \ <<'PY_VANILLA'\nfrom pathlib import Path\np=Path('LobbyGuardian/Plugin')\nm=(p/'ChatModerators.cs').read_text();w=(p/'WhisperRelay.cs').read_text()\n\
+        assert 'senderRecord=GameBridge.ReadVotingRoster()' in m\nassert 'finally{_replyToModerator=false;}' in\
+        \ m\nassert 'message.Length<2' in m\nassert 'Native chat send unavailable; reply not sent' in w\nassert\
+        \ 'QueueModeratorReply(\"[LG] \"+LobbyChatCommands.PublicInfo(info))' in m\nprint('Verified vanilla chat\
+        \ route, identity checks, bounded feedback and public roster summary')\nPY_VANILLA\n"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.4.16-Android-Baseline
+        path: fusionApp/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+    - uses: actions/upload-artifact@v4
+      with:
+        name: LobbyGuardian-v4.4.16-Sources-Diagnostics
+        path: 'LobbyGuardian/Plugin/*.cs
+
+          fusionApp/src/main/java/dev/allofus/fusioncore/LobbyGuardianOverlay.java
+
+          '
+        if-no-files-found: error
