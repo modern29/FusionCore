@@ -1,0 +1,72 @@
+name: LobbyGuardian - Publish licensed APK
+on:
+  workflow_run:
+    workflows:
+      - Lobby Guardian v4.4.20 - Mandatory Cloudflare licensing candidate
+      - LobbyGuardian Licensed Build
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful licensed build run ID (main branch)
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: lobbyguardian-production-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download only the verified licensed build artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          run=$(gh api "repos/$REPO/actions/runs/$RUN_ID")
+          jq -e --arg repo "$REPO" '.conclusion == "success" and .head_branch == "main" and .head_repository.full_name == $repo and (.event == "push" or .event == "workflow_dispatch") and (.path | test("^\\.github/workflows/lobbyguardian-v[0-9]+-cloudflare-license\\.yml$")) and (.name == "Lobby Guardian v4.4.20 - Mandatory Cloudflare licensing candidate" or .name == "LobbyGuardian Licensed Build")' <<< "$run" >/dev/null
+          artifacts=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" | jq -s '[.[].artifacts[] | select(.expired == false and (.name | test("^LobbyGuardian-v[0-9]+\\.[0-9]+\\.[0-9]+-Licensed-Candidate$")))]')
+          [[ $(jq 'length' <<< "$artifacts") == 1 ]]
+          name=$(jq -r '.[0].name' <<< "$artifacts")
+          version=${name#LobbyGuardian-}
+          version=${version%-Licensed-Candidate}
+          mkdir -p "$RUNNER_TEMP/licensed-apk"
+          gh run download "$RUN_ID" --repo "$REPO" --name "$name" --dir "$RUNNER_TEMP/licensed-apk"
+          mapfile -d '' files < <(find "$RUNNER_TEMP/licensed-apk" -type f -name '*.apk' -print0)
+          [[ ${#files[@]} == 1 ]]
+          apk=${files[0]}
+          [[ $(stat -c %s "$apk") -le 83886080 ]]
+          unzip -tq "$apk" >/dev/null
+          unzip -Z1 "$apk" | grep -Fx AndroidManifest.xml >/dev/null
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Upload licensed APK and release metadata
+        env:
+          LG_PUBLISH_TOKEN: ${{ secrets.LG_PUBLISH_TOKEN }}
+          VERSION: ${{ steps.artifact.outputs.version }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ ${#LG_PUBLISH_TOKEN} -ge 32 ]] || { echo 'Set the LG_PUBLISH_TOKEN repository secret first.'; exit 1; }
+          mapfile -d '' files < <(find "$RUNNER_TEMP/licensed-apk" -type f -name '*.apk' -print0)
+          [[ ${#files[@]} == 1 ]]
+          curl --fail-with-body --silent --show-error --max-time 240 \
+            -H "Authorization: Bearer $LG_PUBLISH_TOKEN" \
+            -H 'Content-Type: application/vnd.android.package-archive' \
+            -H "X-LG-Version: $VERSION" \
+            -H "X-LG-Notes: Licensed build $VERSION (GitHub Actions run $RUN_ID)." \
+            --data-binary "@${files[0]}" \
+            'https://lobbyguardian.lobbyguardian.workers.dev/api/publish/apk'
